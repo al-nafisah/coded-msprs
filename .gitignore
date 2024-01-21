@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+
+# C++ build tree and the AFF3CT install prefix
+build/
+.aff3ct/
+
+# Board serials stay on the machine
+bench.local.json
+
+# Session captures stay local; the few the notebooks cite are tracked with -f
+results/sessions/
+*.npy
