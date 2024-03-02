@@ -1,0 +1,82 @@
+{
+  "conv_coder": {
+    "K": 3,
+    "octal_code": [
+      5,
+      7
+    ]
+  },
+  "conv_rate": 0.5,
+  "source_bits": 4998,
+  "coded_bits": 10000,
+  "interleaver_seed": 42,
+  "turbo_iterations": 7,
+  "es": 5.0,
+  "bits_per_symbol": {
+    "msprs": 2,
+    "ask4": 2,
+    "ask2": 1
+  },
+  "avg_bit_energy": {
+    "msprs": 0.5,
+    "ask4": 0.5,
+    "ask2": 1.0
+  },
+  "l0_values": [
+    3,
+    4,
+    5,
+    6
+  ],
+  "families": [
+    "balanced",
+    "unbalanced"
+  ],
+  "ldpc": {
+    "k": 4000,
+    "n": 8000,
+    "matrix": "MACKAY_4000_8000.alist",
+    "bp_iterations": 20
+  },
+  "monte_carlo": {
+    "min_bit_errors": 200,
+    "min_packets": 200,
+    "reliability_floor": 30
+  },
+  "ebno_grid_db": {
+    "ber": [
+      0.0,
+      7.0,
+      0.5
+    ],
+    "exit": [
+      0.0,
+      10.0,
+      0.2
+    ],
+    "exit_standout": [
+      0.0,
+      3.0,
+      6.0,
+      9.0
+    ],
+    "convergence": [
+      3.0,
+      4.0,
+      5.0,
+      6.0,
+      7.0
+    ]
+  },
+  "exit_ia_grid": {
+    "scale": 0.999,
+    "lo": 0.001,
+    "hi": 1.0,
+    "n": 100
+  },
+  "exit_n_trials": 100,
+  "ftn": {
+    "tau": 0.5,
+    "rolloff": 0.3
+  }
+}
