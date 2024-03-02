@@ -26,3 +26,6 @@ add_library(msprs_core INTERFACE)
 target_include_directories(msprs_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(msprs_core INTERFACE aff3ct::aff3ct-static-lib Threads::Threads)
 target_compile_definitions(msprs_core INTERFACE MSPRS_REPO_ROOT="${MSPRS_REPO_ROOT}")
+
+add_executable(msprs ${CMAKE_CURRENT_SOURCE_DIR}/src/msprs.cpp)
+target_link_libraries(msprs PRIVATE msprs_core)
