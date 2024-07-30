@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 
+#include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/Params.hpp"
 #include "MSPRS/Taps.hpp"
 
@@ -15,6 +16,7 @@ struct args
     std::string family = "balanced";
     std::string params = msprs::Params::default_path();
     std::string taps   = msprs::taps_dir();
+    double      sigma  = 1.0;
 };
 
 args parse(int argc, char** argv)
@@ -29,6 +31,7 @@ args parse(int argc, char** argv)
         else if (s == "--family" && i + 1 < argc) a.family = next();
         else if (s == "--params" && i + 1 < argc) a.params = next();
         else if (s == "--taps"   && i + 1 < argc) a.taps   = next();
+        else if (s == "--sigma"  && i + 1 < argc) a.sigma  = std::stod(next());
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -57,6 +60,53 @@ int main(int argc, char** argv)
         std::cout << std::setprecision(12);
         for (double v : t.h0) std::cout << v << "\n";
         std::cout << t.h1 << "\n";
+        return 0;
+    }
+
+    // Parity harness: identical input in, numbers out, so the modem can be
+    // diffed against a reference implementation.
+    if (a.mode == "modtest" || a.mode == "demodtest" || a.mode == "tdemodtest")
+    {
+        const auto t = msprs::load_taps(a.taps, a.L0, a.family);
+        const std::vector<float> CP = { (float)a.sigma };
+        std::cout << std::setprecision(12);
+
+        if (a.mode == "modtest")
+        {
+            std::vector<int> bits;
+            int b;
+            while (std::cin >> b) bits.push_back(b);
+            msprs::Modem_MSPRS<> m((int)bits.size(), t);
+            std::vector<float> out(msprs::Modem_MSPRS<>::size_mod((int)bits.size(), a.L0));
+            m.modulate(bits, out);
+            for (auto v : out) std::cout << v << "\n";
+            return 0;
+        }
+
+        if (a.mode == "demodtest")
+        {
+            std::vector<float> y;
+            double v;
+            while (std::cin >> v) y.push_back((float)v);
+            const int Nb = 2 * (int)y.size() - (a.L0 - 1) - (a.L0 % 2 == 0 ? 1 : 0);
+            msprs::Modem_MSPRS<> m(Nb, t);
+            std::vector<float> llr(Nb);
+            m.demodulate(CP, y, llr);
+            for (auto z : llr) std::cout << z << "\n";
+            return 0;
+        }
+
+        int n_sym = 0;
+        std::cin >> n_sym;
+        std::vector<float> y(n_sym);
+        for (int i = 0; i < n_sym; i++) std::cin >> y[i];
+        std::vector<float> la;
+        double v;
+        while (std::cin >> v) la.push_back((float)v);
+        msprs::Modem_MSPRS<> m((int)la.size(), t);
+        std::vector<float> ext(la.size());
+        m.tdemodulate(CP, y, la, ext);
+        for (auto z : ext) std::cout << z << "\n";
         return 0;
     }
 
