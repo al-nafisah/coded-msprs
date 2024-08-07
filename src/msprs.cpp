@@ -4,6 +4,7 @@
 #include <string>
 
 #include "MSPRS/Modem_MSPRS.hpp"
+#include "MSPRS/NSC.hpp"
 #include "MSPRS/Params.hpp"
 #include "MSPRS/Taps.hpp"
 
@@ -106,6 +107,36 @@ int main(int argc, char** argv)
         msprs::Modem_MSPRS<> m((int)la.size(), t);
         std::vector<float> ext(la.size());
         m.tdemodulate(CP, y, la, ext);
+        for (auto z : ext) std::cout << z << "\n";
+        return 0;
+    }
+
+    if (a.mode == "enctest" || a.mode == "dectest")
+    {
+        const auto p = msprs::load_params(a.params);
+        const msprs::NSC_Trellis tr(p.conv_K, { p.conv_octal[0], p.conv_octal[1] });
+        std::cout << std::setprecision(12);
+
+        if (a.mode == "enctest")
+        {
+            std::vector<int> u;
+            int b;
+            while (std::cin >> b) u.push_back(b);
+            msprs::Encoder_NSC<> enc((int)u.size(), tr);
+            std::vector<int> x(tr.codeword_length((int)u.size()));
+            enc.encode(u, x);
+            for (auto v : x) std::cout << v << "\n";
+            return 0;
+        }
+
+        std::vector<float> lin;
+        double v;
+        while (std::cin >> v) lin.push_back((float)v);
+        const int K = (int)lin.size() / tr.n_out - tr.memory;
+        msprs::Decoder_NSC_SISO<> d(K, tr);
+        std::vector<float> ext(lin.size());
+        std::vector<int> hard(K);
+        d.decode_both(lin.data(), ext.data(), hard.data());
         for (auto z : ext) std::cout << z << "\n";
         return 0;
     }
