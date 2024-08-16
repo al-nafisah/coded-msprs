@@ -6,6 +6,7 @@
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Params.hpp"
+#include "MSPRS/Sweep.hpp"
 #include "MSPRS/Taps.hpp"
 
 namespace
@@ -18,6 +19,13 @@ struct args
     std::string params = msprs::Params::default_path();
     std::string taps   = msprs::taps_dir();
     double      sigma  = 1.0;
+    int         iters  = 7;
+    int         be     = 500;
+    int         minfra = 200;
+    int         maxfra = 200000;
+    int         threads = 1;
+    int         seed   = 0;
+    double      lo = 0.0, hi = 7.01, step = 0.5;
 };
 
 args parse(int argc, char** argv)
@@ -33,6 +41,15 @@ args parse(int argc, char** argv)
         else if (s == "--params" && i + 1 < argc) a.params = next();
         else if (s == "--taps"   && i + 1 < argc) a.taps   = next();
         else if (s == "--sigma"  && i + 1 < argc) a.sigma  = std::stod(next());
+        else if (s == "--iters"     && i + 1 < argc) a.iters   = std::stoi(next());
+        else if (s == "--be"        && i + 1 < argc) a.be      = std::stoi(next());
+        else if (s == "--min-fra"   && i + 1 < argc) a.minfra  = std::stoi(next());
+        else if (s == "--max-fra"   && i + 1 < argc) a.maxfra  = std::stoi(next());
+        else if (s == "--threads"   && i + 1 < argc) a.threads = std::stoi(next());
+        else if (s == "--seed"      && i + 1 < argc) a.seed    = std::stoi(next());
+        else if (s == "--ebn0-min"  && i + 1 < argc) a.lo      = std::stod(next());
+        else if (s == "--ebn0-max"  && i + 1 < argc) a.hi      = std::stod(next());
+        else if (s == "--ebn0-step" && i + 1 < argc) a.step    = std::stod(next());
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -138,6 +155,45 @@ int main(int argc, char** argv)
         std::vector<int> hard(K);
         d.decode_both(lin.data(), ext.data(), hard.data());
         for (auto z : ext) std::cout << z << "\n";
+        return 0;
+    }
+
+    if (a.mode == "uncoded-msprs" || a.mode == "coded-msprs")
+    {
+        const auto pr = msprs::load_params(a.params);
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
+
+        msprs::SweepConfig cfg;
+        cfg.coded   = (a.mode == "coded-msprs");
+        cfg.K       = cfg.coded ? pr.source_bits : 2 * pr.source_bits + 2;
+        cfg.iters   = a.iters;
+        cfg.be      = a.be;
+        cfg.min_fra = a.minfra;
+        cfg.max_fra = a.maxfra;
+        cfg.threads = a.threads;
+        cfg.seed    = a.seed;
+        cfg.itl_seed  = pr.interleaver_seed;
+        cfg.ebn0_min  = a.lo;
+        cfg.ebn0_max  = a.hi;
+        cfg.ebn0_step = a.step;
+
+        std::cout << "#     Eb/N0 |        FRA |         BE |       BER |    s\n";
+        for (const auto& pt : msprs::run_sweep(cfg, taps, tr))
+        {
+            std::cout << std::fixed << std::setprecision(2) << std::setw(11) << pt.eb_no_db
+                      << " |" << std::setw(11) << pt.frames << " |" << std::setw(11) << pt.errors
+                      << " |" << std::scientific << std::setprecision(3) << std::setw(11)
+                      << (double)pt.errors / (double)pt.bits
+                      << " |" << std::fixed << std::setprecision(1) << std::setw(5) << pt.seconds << "\n";
+            if (cfg.coded)
+            {
+                std::cout << "# per-iter " << std::fixed << std::setprecision(1) << pt.eb_no_db;
+                for (auto e : pt.per_iter) std::cout << " " << e;
+                std::cout << "\n";
+            }
+        }
+        std::cout << "# done\n";
         return 0;
     }
 
