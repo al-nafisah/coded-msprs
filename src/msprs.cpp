@@ -5,6 +5,7 @@
 
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
+#include "MSPRS/ExitSweep.hpp"
 #include "MSPRS/Params.hpp"
 #include "MSPRS/Sweep.hpp"
 #include "MSPRS/Taps.hpp"
@@ -26,6 +27,8 @@ struct args
     int         threads = 1;
     int         seed   = 0;
     double      lo = 0.0, hi = 7.01, step = 0.5;
+    int         n_ia = 100, n_trials = 50, exit_bits = 4998;
+    bool        fresh_rx = false;
 };
 
 args parse(int argc, char** argv)
@@ -50,6 +53,10 @@ args parse(int argc, char** argv)
         else if (s == "--ebn0-min"  && i + 1 < argc) a.lo      = std::stod(next());
         else if (s == "--ebn0-max"  && i + 1 < argc) a.hi      = std::stod(next());
         else if (s == "--ebn0-step" && i + 1 < argc) a.step    = std::stod(next());
+        else if (s == "--n-ia"      && i + 1 < argc) a.n_ia     = std::stoi(next());
+        else if (s == "--n-trials"  && i + 1 < argc) a.n_trials = std::stoi(next());
+        else if (s == "--exit-bits" && i + 1 < argc) a.exit_bits = std::stoi(next());
+        else if (s == "--exit-fresh-rx")             a.fresh_rx = true;
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -193,6 +200,24 @@ int main(int argc, char** argv)
                 std::cout << "\n";
             }
         }
+        std::cout << "# done\n";
+        return 0;
+    }
+
+    if (a.mode == "exit")
+    {
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        msprs::ExitConfig cfg;
+        cfg.bits = a.exit_bits; cfg.n_ia = a.n_ia; cfg.n_trials = a.n_trials;
+        cfg.threads = a.threads; cfg.fresh_rx = a.fresh_rx;
+        cfg.ebn0_min = a.lo; cfg.ebn0_max = a.hi; cfg.ebn0_step = a.step;
+
+        std::cout << "# exit L0=" << a.L0 << " " << a.family << " trials=" << cfg.n_trials
+                  << " n_ia=" << cfg.n_ia << " bits=" << cfg.bits << "\n"
+                  << std::setprecision(10);
+        for (const auto& e : msprs::exit_sweep(cfg, taps))
+            std::cout << "E " << e.eb_no_db << " " << e.ia << " " << e.ie_avg << " "
+                      << e.ie_hist << " " << e.ie_mag << " " << e.ia_measured << "\n";
         std::cout << "# done\n";
         return 0;
     }
