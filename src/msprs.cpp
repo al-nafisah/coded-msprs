@@ -5,6 +5,7 @@
 
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
+#include "MSPRS/Bounds.hpp"
 #include "MSPRS/ExitSweep.hpp"
 #include "MSPRS/Params.hpp"
 #include "MSPRS/Sweep.hpp"
@@ -219,6 +220,21 @@ int main(int argc, char** argv)
             std::cout << "E " << e.eb_no_db << " " << e.ia << " " << e.ie_avg << " "
                       << e.ie_hist << " " << e.ie_mag << " " << e.ia_measured << "\n";
         std::cout << "# done\n";
+        return 0;
+    }
+
+    if (a.mode == "bounds")
+    {
+        const auto pr = msprs::load_params(a.params);
+        std::cout << "# family L0 d2_es1 d2_es5 gain_db\n" << std::fixed << std::setprecision(6);
+        for (const auto& fam : pr.families)
+            for (int L0 : pr.l0_values)
+            {
+                const auto t = msprs::load_taps(a.taps, L0, fam);
+                const double d2 = msprs::min_squared_distance(t);
+                std::cout << fam << " " << L0 << " " << d2 << " " << pr.es * d2 << " "
+                          << 10.0 * std::log10(pr.es * d2 / 4.0) << "\n";
+            }
         return 0;
     }
 
