@@ -7,6 +7,7 @@
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Bounds.hpp"
 #include "MSPRS/ExitSweep.hpp"
+#include "MSPRS/LdpcSweep.hpp"
 #include "MSPRS/Params.hpp"
 #include "MSPRS/Sweep.hpp"
 #include "MSPRS/Taps.hpp"
@@ -30,6 +31,9 @@ struct args
     double      lo = 0.0, hi = 7.01, step = 0.5;
     int         n_ia = 100, n_trials = 50, exit_bits = 4998;
     bool        fresh_rx = false;
+    int         bp_ite = 20;
+    int         chunk  = 25;
+    std::string ldpc_h;
 };
 
 args parse(int argc, char** argv)
@@ -58,6 +62,9 @@ args parse(int argc, char** argv)
         else if (s == "--n-trials"  && i + 1 < argc) a.n_trials = std::stoi(next());
         else if (s == "--exit-bits" && i + 1 < argc) a.exit_bits = std::stoi(next());
         else if (s == "--exit-fresh-rx")             a.fresh_rx = true;
+        else if (s == "--bp-ite"    && i + 1 < argc) a.bp_ite   = std::stoi(next());
+        else if (s == "--chunk"     && i + 1 < argc) a.chunk    = std::stoi(next());
+        else if (s == "--ldpc-h"    && i + 1 < argc) a.ldpc_h   = next();
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -180,6 +187,7 @@ int main(int argc, char** argv)
         cfg.min_fra = a.minfra;
         cfg.max_fra = a.maxfra;
         cfg.threads = a.threads;
+        cfg.chunk   = a.chunk;
         cfg.seed    = a.seed;
         cfg.itl_seed  = pr.interleaver_seed;
         cfg.ebn0_min  = a.lo;
@@ -219,6 +227,30 @@ int main(int argc, char** argv)
         for (const auto& e : msprs::exit_sweep(cfg, taps))
             std::cout << "E " << e.eb_no_db << " " << e.ia << " " << e.ie_avg << " "
                       << e.ie_hist << " " << e.ie_mag << " " << e.ia_measured << "\n";
+        std::cout << "# done\n";
+        return 0;
+    }
+
+    if (a.mode == "ldpc-msprs")
+    {
+        const auto pr = msprs::load_params(a.params);
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        msprs::LdpcConfig cfg;
+        cfg.h_path = a.ldpc_h;
+        cfg.bp_iters = a.bp_ite ? a.bp_ite : pr.ldpc.bp_iterations;
+        cfg.iters = a.iters; cfg.be = a.be; cfg.min_fra = a.minfra; cfg.max_fra = a.maxfra;
+        cfg.threads = a.threads; cfg.seed = a.seed; cfg.itl_seed = pr.interleaver_seed;
+        cfg.chunk = a.chunk;
+        cfg.ebn0_min = a.lo; cfg.ebn0_max = a.hi; cfg.ebn0_step = a.step;
+        if (cfg.h_path.empty()) { std::cerr << "ldpc-msprs needs --ldpc-h\n"; return 2; }
+
+        std::cout << "#     Eb/N0 |        FRA |         BE |       BER |    s\n";
+        for (const auto& pt : msprs::ldpc_sweep(cfg, taps))
+            std::cout << std::fixed << std::setprecision(2) << std::setw(11) << pt.eb_no_db
+                      << " |" << std::setw(11) << pt.frames << " |" << std::setw(11) << pt.errors
+                      << " |" << std::scientific << std::setprecision(3) << std::setw(11)
+                      << (double)pt.errors / (double)pt.bits
+                      << " |" << std::fixed << std::setprecision(1) << std::setw(5) << pt.seconds << "\n";
         std::cout << "# done\n";
         return 0;
     }
