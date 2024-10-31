@@ -9,6 +9,7 @@
 #include "MSPRS/ExitSweep.hpp"
 #include "MSPRS/LdpcSweep.hpp"
 #include "MSPRS/Params.hpp"
+#include "MSPRS/Record.hpp"
 #include "MSPRS/Sweep.hpp"
 #include "MSPRS/Taps.hpp"
 
@@ -34,6 +35,9 @@ struct args
     int         bp_ite = 20;
     int         chunk  = 25;
     std::string ldpc_h;
+    std::string out;
+    std::string stamp;
+    std::string scheme;
 };
 
 args parse(int argc, char** argv)
@@ -65,6 +69,9 @@ args parse(int argc, char** argv)
         else if (s == "--bp-ite"    && i + 1 < argc) a.bp_ite   = std::stoi(next());
         else if (s == "--chunk"     && i + 1 < argc) a.chunk    = std::stoi(next());
         else if (s == "--ldpc-h"    && i + 1 < argc) a.ldpc_h   = next();
+        else if (s == "--out"       && i + 1 < argc) a.out      = next();
+        else if (s == "--stamp"     && i + 1 < argc) a.stamp    = next();
+        else if (s == "--scheme"    && i + 1 < argc) a.scheme   = next();
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -207,6 +214,20 @@ int main(int argc, char** argv)
                 std::cout << "# per-iter " << std::fixed << std::setprecision(1) << pt.eb_no_db;
                 for (auto e : pt.per_iter) std::cout << " " << e;
                 std::cout << "\n";
+            }
+            if (!a.out.empty())
+            {
+                nlohmann::json meta;
+                meta["L0"] = a.L0;
+                meta["filter"] = a.family;
+                meta["source_bits"] = cfg.K;
+                meta["metric_convention"] = "llr-2sigma2";
+                if (cfg.coded) { meta["iters"] = cfg.iters; meta["code"] = "conv_K3_57"; }
+                const std::string scheme = a.scheme.empty()
+                    ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family +
+                       (cfg.coded ? "_conv_K3_" + std::to_string(cfg.iters) + "iters" : "_uncoded"))
+                    : a.scheme;
+                msprs::write_point(a.out, scheme, pt, meta, "aff3ct-4.1.2", a.stamp);
             }
         }
         std::cout << "# done\n";
