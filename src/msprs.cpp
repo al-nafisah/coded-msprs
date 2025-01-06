@@ -245,9 +245,46 @@ int main(int argc, char** argv)
         std::cout << "# exit L0=" << a.L0 << " " << a.family << " trials=" << cfg.n_trials
                   << " n_ia=" << cfg.n_ia << " bits=" << cfg.bits << "\n"
                   << std::setprecision(10);
-        for (const auto& e : msprs::exit_sweep(cfg, taps))
+        const auto pts = msprs::exit_sweep(cfg, taps);
+        for (const auto& e : pts)
             std::cout << "E " << e.eb_no_db << " " << e.ia << " " << e.ie_avg << " "
                       << e.ie_hist << " " << e.ie_mag << " " << e.ia_measured << "\n";
+
+        if (!a.out.empty())
+        {
+            nlohmann::json j;
+            std::vector<double> ia;
+            for (int k = 0; k < cfg.n_ia; k++) ia.push_back(pts[(size_t)k].ia);
+            j["IA"] = ia;
+            std::vector<double> snrs;
+            for (const auto& e : pts)
+            {
+                std::ostringstream key; key << e.eb_no_db;
+                if (!j["results"].contains(key.str()))
+                {
+                    snrs.push_back(e.eb_no_db);
+                    j["results"][key.str()] = { {"IE_avg", nlohmann::json::array()},
+                                                {"IE_hist", nlohmann::json::array()},
+                                                {"IE_mag", nlohmann::json::array()},
+                                                {"IA_measured", nlohmann::json::array()} };
+                }
+                auto& r = j["results"][key.str()];
+                r["IE_avg"].push_back(e.ie_avg);
+                r["IE_hist"].push_back(e.ie_hist);
+                r["IE_mag"].push_back(e.ie_mag);
+                r["IA_measured"].push_back(e.ia_measured);
+            }
+            j["eb_no_db"] = snrs;
+            j["meta"] = { {"L0", a.L0}, {"filter", a.family}, {"N_TRIALS", cfg.n_trials},
+                          {"source_bits", cfg.bits}, {"implementation", "aff3ct-4.1.2"},
+                          {"metric_convention", "llr-2sigma2"} };
+            if (!a.stamp.empty()) j["meta"]["timestamp"] = a.stamp;
+            const std::string scheme = a.scheme.empty()
+                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family) : a.scheme;
+            msprs::mkdir_p(a.out);
+            std::ofstream of(a.out + "/" + scheme + ".json");
+            of << j.dump(2) << "\n";
+        }
         std::cout << "# done\n";
         return 0;
     }
