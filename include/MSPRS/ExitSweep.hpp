@@ -19,6 +19,7 @@
 
 #include "MSPRS/Exit.hpp"
 #include "MSPRS/Modem_MSPRS.hpp"
+#include "MSPRS/NSC.hpp"
 #include "MSPRS/Taps.hpp"
 
 namespace msprs
@@ -116,6 +117,48 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
         for (int k = 0; k < cfg.n_ia; k++)
             out.push_back({ ebn0, IA[(size_t)k], res[(size_t)k][0], res[(size_t)k][1],
                             res[(size_t)k][2], res[(size_t)k][3] });
+    }
+    return out;
+}
+
+// EXIT characteristic of the outer decoder. It does not depend on the channel:
+// synthetic a priori LLRs at each I_A go straight in, and the extrinsic mutual
+// information is measured on the coded bits.
+struct DecoderExitPoint { double ia, ie_avg, ie_hist, ia_measured; };
+
+inline std::vector<DecoderExitPoint> decoder_exit(const NSC_Trellis& tr, int source_bits,
+                                                  int n_ia, int n_trials, int seed = 0)
+{
+    Encoder_NSC<>      enc(source_bits, tr);
+    Decoder_NSC_SISO<> dec(source_bits, tr);
+    const int N = tr.codeword_length(source_bits);
+
+    std::mt19937_64 gen((uint64_t)seed);
+    std::vector<int> u((size_t)source_bits), cw((size_t)N);
+    for (int i = 0; i < source_bits; i++) u[(size_t)i] = (int)(gen() & 1ull);
+    enc.encode(u, cw);
+
+    std::vector<DecoderExitPoint> out;
+    std::vector<double> la((size_t)N), ext((size_t)N);
+    std::vector<float>  laf((size_t)N), extf((size_t)N);
+    std::vector<int>    hard((size_t)source_bits);
+
+    for (int k = 0; k < n_ia; k++)
+    {
+        const double ia = 1e-4 + (0.9999 - 1e-4) * (double)k / (double)(n_ia - 1);
+        const double sa = i_inv(ia);
+        double a = 0, h = 0, iam = 0;
+        for (int tr_i = 0; tr_i < n_trials; tr_i++)
+        {
+            gen_llrs(cw, sa, gen, la);
+            if (tr_i == 0) iam = mi_avg(la, cw);
+            for (int i = 0; i < N; i++) laf[(size_t)i] = (float)(-la[(size_t)i]);
+            dec.decode_both(laf.data(), extf.data(), hard.data());
+            for (int i = 0; i < N; i++) ext[(size_t)i] = -(double)extf[(size_t)i];
+            a += mi_avg(ext, cw);
+            h += mi_hist(ext, cw);
+        }
+        out.push_back({ ia, a / n_trials, h / n_trials, iam });
     }
     return out;
 }

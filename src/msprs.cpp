@@ -313,6 +313,34 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    if (a.mode == "exit-decoder")
+    {
+        const auto pr = msprs::load_params(a.params);
+        const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
+        const auto pts = msprs::decoder_exit(tr, pr.source_bits, a.n_ia, a.n_trials, a.seed);
+
+        std::cout << std::setprecision(10);
+        for (const auto& e : pts)
+            std::cout << "D " << e.ia << " " << e.ie_avg << " " << e.ie_hist << " "
+                      << e.ia_measured << "\n";
+
+        if (!a.out.empty())
+        {
+            nlohmann::json j;
+            std::vector<double> ia, av, hi, iam;
+            for (const auto& e : pts)
+            { ia.push_back(e.ia); av.push_back(e.ie_avg); hi.push_back(e.ie_hist);
+              iam.push_back(e.ia_measured); }
+            j["IA"] = ia; j["IE_avg"] = av; j["IE_hist"] = hi; j["IA_measured"] = iam;
+            j["coder"] = { {"K", pr.conv_K}, {"octal_code", pr.conv_octal} };
+            if (!a.stamp.empty()) j["timestamp"] = a.stamp;
+            msprs::mkdir_p(a.out);
+            std::ofstream of(a.out + "/coder_K" + std::to_string(pr.conv_K) + ".json");
+            of << j.dump(2) << "\n";
+        }
+        return 0;
+    }
+
     if (a.mode == "bounds")
     {
         const auto pr = msprs::load_params(a.params);
