@@ -7,6 +7,7 @@
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Bounds.hpp"
 #include "MSPRS/ExitSweep.hpp"
+#include "MSPRS/Eye.hpp"
 #include "MSPRS/LdpcSweep.hpp"
 #include "MSPRS/Params.hpp"
 #include "MSPRS/Record.hpp"
@@ -38,6 +39,8 @@ struct args
     std::string out;
     std::string stamp;
     std::string scheme;
+    int         sps = 32, symbols = 3000;
+    double      ebn0 = 15.11;
 };
 
 args parse(int argc, char** argv)
@@ -72,6 +75,9 @@ args parse(int argc, char** argv)
         else if (s == "--out"       && i + 1 < argc) a.out      = next();
         else if (s == "--stamp"     && i + 1 < argc) a.stamp    = next();
         else if (s == "--scheme"    && i + 1 < argc) a.scheme   = next();
+        else if (s == "--sps"       && i + 1 < argc) a.sps      = std::stoi(next());
+        else if (s == "--symbols"   && i + 1 < argc) a.symbols  = std::stoi(next());
+        else if (s == "--ebn0"      && i + 1 < argc) a.ebn0     = std::stod(next());
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -310,6 +316,18 @@ int main(int argc, char** argv)
                       << (double)pt.errors / (double)pt.bits
                       << " |" << std::fixed << std::setprecision(1) << std::setw(5) << pt.seconds << "\n";
         std::cout << "# done\n";
+        return 0;
+    }
+
+    if (a.mode == "eye")
+    {
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        msprs::EyeConfig cfg;
+        cfg.symbols = a.symbols; cfg.sps = a.sps; cfg.eb_no_db = a.ebn0; cfg.seed = a.seed;
+        const auto e = msprs::eye_waveform(cfg, taps);
+        std::cout << "# sps " << e.sps << " delay " << e.delay
+                  << " ebn0 " << cfg.eb_no_db << "\n" << std::setprecision(9);
+        for (double v : e.samples) std::cout << v << "\n";
         return 0;
     }
 
