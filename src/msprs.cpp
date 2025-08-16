@@ -325,12 +325,13 @@ int main(int argc, char** argv)
     {
         const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
         const msprs::PairTrellis tr(taps);
-        std::cout << "# state b0 b1 symbol\n" << std::setprecision(12);
+        std::cout << "# state b0 b1 symbol next_state\n" << std::setprecision(12);
         for (int s = 0; s < tr.M; s++)
             for (int b0 = 0; b0 < 2; b0++)
                 for (int b1 = 0; b1 < 2; b1++)
                     std::cout << s << " " << b0 << " " << b1 << " "
-                              << tr.out[((size_t)s * 2 + b0) * 2 + b1] << "\n";
+                              << tr.out[((size_t)s * 2 + b0) * 2 + b1] << " "
+                              << tr.next[(size_t)s * 2 + b0] << "\n";
         return 0;
     }
 
