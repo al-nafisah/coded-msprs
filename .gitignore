@@ -13,3 +13,6 @@ bench.local.json
 # Session captures stay local; the few the notebooks cite are tracked with -f
 results/sessions/
 *.npy
+
+# Generated training data
+data/
