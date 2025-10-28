@@ -7,6 +7,7 @@
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Bounds.hpp"
 #include "MSPRS/Dataset.hpp"
+#include "MSPRS/Student.hpp"
 #include "MSPRS/ExitSweep.hpp"
 #include "MSPRS/Eye.hpp"
 #include "MSPRS/LdpcSweep.hpp"
@@ -45,6 +46,7 @@ struct args
     int         sps = 32, symbols = 3000;
     double      ebn0 = 15.11;
     int         frames = 200;
+    std::string siso;
 };
 
 args parse(int argc, char** argv)
@@ -84,6 +86,7 @@ args parse(int argc, char** argv)
         else if (s == "--symbols"   && i + 1 < argc) a.symbols  = std::stoi(next());
         else if (s == "--ebn0"      && i + 1 < argc) a.ebn0     = std::stod(next());
         else if (s == "--frames"    && i + 1 < argc) a.frames   = std::stoi(next());
+        else if (s == "--siso"      && i + 1 < argc) a.siso     = next();
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -383,6 +386,51 @@ int main(int argc, char** argv)
                       << std::setw(13) << pr.source_bits / (ms * 1e3)
                       << std::setprecision(2) << std::setw(7) << ref_ms / ms << "x\n";
         }
+        return 0;
+    }
+
+    // Uncoded BER with the learned equaliser in place of the BCJR, so the two
+    // are measured the same way.
+    if (a.mode == "siso-ber")
+    {
+        const auto pr = msprs::load_params(a.params);
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        if (a.siso.empty()) { std::cerr << "siso-ber needs --siso\n"; return 2; }
+        const msprs::Student net(a.siso, a.siso.substr(0, a.siso.rfind('.')) + ".norm");
+        const msprs::DatasetConfig dc;
+
+        const int N  = 2 * pr.source_bits;
+        const int Ns = msprs::Modem_MSPRS<>::size_mod(N, a.L0);
+        msprs::Modem_MSPRS<> modem(N, taps);
+        std::mt19937_64 gen((uint64_t)a.seed);
+        std::normal_distribution<double> nd(0.0, 1.0);
+
+        std::cout << "#     Eb/N0 |        FRA |         BE |       BER\n";
+        for (double ebn0 = a.lo; ebn0 < a.hi; ebn0 += a.step)
+        {
+            const double sigma = std::sqrt(1.0 / (2.0 * std::pow(10.0, ebn0 / 10.0)));
+            long long errs = 0, bits_cnt = 0;
+            std::vector<int> bits((size_t)N);
+            std::vector<float> sym((size_t)Ns), rx((size_t)Ns);
+            std::vector<float> la((size_t)N, 0.0f), ext((size_t)N);
+
+            for (int f = 0; f < a.frames; f++)
+            {
+                for (int i = 0; i < N; i++) bits[(size_t)i] = (int)(gen() & 1ull);
+                modem.modulate(bits, sym);
+                for (int i = 0; i < Ns; i++) rx[(size_t)i] = sym[(size_t)i] + (float)(sigma * nd(gen));
+                std::fill(la.begin(), la.end(), 0.0f);
+                net.tdemodulate(rx, la, ext, dc, (float)sigma);
+                for (int i = 0; i < N; i++)
+                    errs += ((ext[(size_t)i] < 0.0f ? 1 : 0) != bits[(size_t)i]);
+                bits_cnt += N;
+            }
+            std::cout << std::fixed << std::setprecision(2) << std::setw(11) << ebn0
+                      << " |" << std::setw(11) << a.frames << " |" << std::setw(11) << errs
+                      << " |" << std::scientific << std::setprecision(3) << std::setw(11)
+                      << (double)errs / (double)bits_cnt << "\n";
+        }
+        std::cout << "# done\n";
         return 0;
     }
 
