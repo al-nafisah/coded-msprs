@@ -2,6 +2,16 @@
 
 **Multi-Stream Partial Response Signaling (MS-PRS)** is a modulation scheme at the Nyquist rate that adds controlled intersymbol interference through short FIR filters across two bipolar sub-streams, instead of compressing the symbol period the way faster-than-Nyquist signaling does. MS-PRS at Rate 2 carries two bits per channel use. This project uses [AFF3CT](https://github.com/aff3ct/aff3ct) for efficient BER simulations.
 
+Inside that modulator, the interleaved bits split into two bipolar sub-streams. One runs through
+an `L0`-tap FIR filter `h0`, which is where the controlled ISI comes from; the other passes a
+single tap. The two are scaled and summed into one Nyquist-rate symbol, carrying two bits between
+them. The gains set the energy split, `eta_0 + eta_1 = Es`: the balanced family divides it evenly,
+the unbalanced family tilts it toward the single-tap stream.
+
+<p align="center">
+  <img src="figures/msprs_modulator.png" width="62%">
+</p>
+
 The chain the simulator runs: encode, interleave, modulate, then a receiver that passes extrinsic information between the equalizer and the decoder. The receiver is a turbo loop: a BCJR equalizer on the `2^(L0-1)`-state trellis trades log-likelihood ratios with a rate-1/2 convolutional or LDPC decoder.
 
 <p align="center">
