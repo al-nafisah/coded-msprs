@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <random>
 #include <vector>
 
@@ -67,8 +66,7 @@ inline PassTime time_passes(const Bcjr algo, const Taps& taps, const NSC_Trellis
     enc.encode(u, cw);
     itl_b.interleave(cw, cw_i);
     modem.modulate(cw_i, sym);
-    // Coded at Rc = 1/2 with m = 2, so Es/N0 = Eb/N0, as in the BER sweep.
-    const std::vector<float> CP = { (float)std::sqrt(1.0 / (2.0 * std::pow(10.0, ebn0 / 10.0))) };
+    const std::vector<float> CP = { (float)noise_sigma(ebn0, 0.5) };
     for (int i = 0; i < Ns; i++) rx[(size_t)i] = sym[(size_t)i] + CP[0] * (float)nd(gen);
 
     modem.tdemodulate(CP, rx, La_i, Le_i);
