@@ -24,6 +24,7 @@ namespace msprs
 
 struct SweepConfig
 {
+    Bcjr   algo     = Bcjr::map;   // both the equaliser and the outer decoder
     bool   coded    = true;
     int    K        = 4998;   // information bits per frame
     int    iters    = 7;      // turbo iterations; the loop runs iters+1 passes
@@ -90,7 +91,11 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
 
     std::vector<std::unique_ptr<detail::Chain>> chains;
     for (int t = 0; t < n_threads; t++)
+    {
         chains.emplace_back(new detail::Chain(cfg, trellis, taps, N_in, N_mod, itl_core, t + 1));
+        chains.back()->modem.set_bcjr(cfg.algo);
+        chains.back()->decoder.set_bcjr(cfg.algo);
+    }
 
     auto run_frames = [&](detail::Chain& c, int n, const std::vector<float>& CP, Point& st)
     {

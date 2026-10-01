@@ -13,6 +13,7 @@
 #include "MSPRS/Record.hpp"
 #include "MSPRS/Sweep.hpp"
 #include "MSPRS/Taps.hpp"
+#include "MSPRS/Timing.hpp"
 
 namespace
 {
@@ -39,6 +40,7 @@ struct args
     std::string out;
     std::string stamp;
     std::string scheme;
+    std::string bcjr = "map";
     int         sps = 32, symbols = 3000;
     double      ebn0 = 15.11;
 };
@@ -75,6 +77,7 @@ args parse(int argc, char** argv)
         else if (s == "--out"       && i + 1 < argc) a.out      = next();
         else if (s == "--stamp"     && i + 1 < argc) a.stamp    = next();
         else if (s == "--scheme"    && i + 1 < argc) a.scheme   = next();
+        else if (s == "--bcjr"      && i + 1 < argc) a.bcjr     = next();
         else if (s == "--sps"       && i + 1 < argc) a.sps      = std::stoi(next());
         else if (s == "--symbols"   && i + 1 < argc) a.symbols  = std::stoi(next());
         else if (s == "--ebn0"      && i + 1 < argc) a.ebn0     = std::stod(next());
@@ -82,11 +85,22 @@ args parse(int argc, char** argv)
     }
     return a;
 }
+// Records of the default MAP keep their plain names.
+std::string bcjr_suffix(const msprs::Bcjr b)
+{
+    switch (b)
+    {
+        case msprs::Bcjr::log_map: return "_logmap";
+        case msprs::Bcjr::max_log_map: return "_maxlog";
+        default: return "";
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
     const args a = parse(argc, argv);
+    const msprs::Bcjr algo = msprs::bcjr_from(a.bcjr);
 
     if (a.mode == "params")
     {
@@ -136,6 +150,7 @@ int main(int argc, char** argv)
             while (std::cin >> v) y.push_back((float)v);
             const int Nb = 2 * (int)y.size() - (a.L0 - 1) - (a.L0 % 2 == 0 ? 1 : 0);
             msprs::Modem_MSPRS<> m(Nb, t);
+            m.set_bcjr(algo);
             std::vector<float> llr(Nb);
             m.demodulate(CP, y, llr);
             for (auto z : llr) std::cout << z << "\n";
@@ -150,6 +165,7 @@ int main(int argc, char** argv)
         double v;
         while (std::cin >> v) la.push_back((float)v);
         msprs::Modem_MSPRS<> m((int)la.size(), t);
+        m.set_bcjr(algo);
         std::vector<float> ext(la.size());
         m.tdemodulate(CP, y, la, ext);
         for (auto z : ext) std::cout << z << "\n";
@@ -179,6 +195,7 @@ int main(int argc, char** argv)
         while (std::cin >> v) lin.push_back((float)v);
         const int K = (int)lin.size() / tr.n_out - tr.memory;
         msprs::Decoder_NSC_SISO<> d(K, tr);
+        d.set_bcjr(algo);
         std::vector<float> ext(lin.size());
         std::vector<int> hard(K);
         d.decode_both(lin.data(), ext.data(), hard.data());
@@ -206,6 +223,7 @@ int main(int argc, char** argv)
         cfg.ebn0_min  = a.lo;
         cfg.ebn0_max  = a.hi;
         cfg.ebn0_step = a.step;
+        cfg.algo      = algo;
 
         std::cout << "#     Eb/N0 |        FRA |         BE |       BER |    s\n";
         for (const auto& pt : msprs::run_sweep(cfg, taps, tr))
@@ -229,9 +247,11 @@ int main(int argc, char** argv)
                 meta["source_bits"] = cfg.K;
                 meta["metric_convention"] = "llr-2sigma2";
                 if (cfg.coded) { meta["iters"] = cfg.iters; meta["code"] = "conv_K3_57"; }
+                if (algo != msprs::Bcjr::map) meta["bcjr"] = msprs::to_string(algo);
                 const std::string scheme = a.scheme.empty()
                     ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family +
-                       (cfg.coded ? "_conv_K3_" + std::to_string(cfg.iters) + "iters" : "_uncoded"))
+                       (cfg.coded ? "_conv_K3_" + std::to_string(cfg.iters) + "iters" : "_uncoded") +
+                       bcjr_suffix(algo))
                     : a.scheme;
                 msprs::write_point(a.out, scheme, pt, meta, "aff3ct-4.1.2", a.stamp);
             }
@@ -247,6 +267,7 @@ int main(int argc, char** argv)
         cfg.bits = a.exit_bits; cfg.n_ia = a.n_ia; cfg.n_trials = a.n_trials;
         cfg.threads = a.threads; cfg.fresh_rx = a.fresh_rx;
         cfg.ebn0_min = a.lo; cfg.ebn0_max = a.hi; cfg.ebn0_step = a.step;
+        cfg.algo = algo;
 
         std::cout << "# exit L0=" << a.L0 << " " << a.family << " trials=" << cfg.n_trials
                   << " n_ia=" << cfg.n_ia << " bits=" << cfg.bits << "\n"
@@ -285,8 +306,9 @@ int main(int argc, char** argv)
                           {"source_bits", cfg.bits}, {"implementation", "aff3ct-4.1.2"},
                           {"metric_convention", "llr-2sigma2"} };
             if (!a.stamp.empty()) j["meta"]["timestamp"] = a.stamp;
+            if (algo != msprs::Bcjr::map) j["meta"]["bcjr"] = msprs::to_string(algo);
             const std::string scheme = a.scheme.empty()
-                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family) : a.scheme;
+                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family + bcjr_suffix(algo)) : a.scheme;
             msprs::mkdir_p(a.out);
             std::ofstream of(a.out + "/" + scheme + ".json");
             of << j.dump(2) << "\n";
@@ -335,6 +357,32 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    // Decoding time of the turbo receiver under each BCJR, one thread.
+    if (a.mode == "timing")
+    {
+        const auto pr = msprs::load_params(a.params);
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
+        const int passes = a.iters + 1;
+
+        std::cout << "# L0=" << a.L0 << " " << a.family << ", Eb/N0 " << a.ebn0 << " dB, "
+                  << pr.coded_bits << " coded bits, " << passes << " passes per frame, one thread\n"
+                  << "# bcjr         equaliser_ms  decoder_ms   frame_ms  info_Mbit/s  vs_map\n";
+        double ref_ms = 0.0;   // MAP, the exact reference, comes first
+        for (const auto b : { msprs::Bcjr::map, msprs::Bcjr::log_map, msprs::Bcjr::max_log_map })
+        {
+            const auto   t  = msprs::time_passes(b, taps, tr, pr.source_bits, pr.interleaver_seed, a.ebn0);
+            const double ms = passes * (t.equaliser_us + t.decoder_us) / 1e3;
+            if (b == msprs::Bcjr::map) ref_ms = ms;
+            std::cout << std::left << std::setw(13) << msprs::to_string(b) << std::right << std::fixed
+                      << std::setprecision(3) << std::setw(13) << t.equaliser_us / 1e3
+                      << std::setw(12) << t.decoder_us / 1e3 << std::setw(11) << ms
+                      << std::setw(13) << pr.source_bits / (ms * 1e3)
+                      << std::setprecision(2) << std::setw(7) << ref_ms / ms << "x\n";
+        }
+        return 0;
+    }
+
     if (a.mode == "eye")
     {
         const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
@@ -351,7 +399,7 @@ int main(int argc, char** argv)
     {
         const auto pr = msprs::load_params(a.params);
         const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
-        const auto pts = msprs::decoder_exit(tr, pr.source_bits, a.n_ia, a.n_trials, a.seed);
+        const auto pts = msprs::decoder_exit(tr, pr.source_bits, a.n_ia, a.n_trials, a.seed, algo);
 
         std::cout << std::setprecision(10);
         for (const auto& e : pts)
@@ -368,8 +416,9 @@ int main(int argc, char** argv)
             j["IA"] = ia; j["IE_avg"] = av; j["IE_hist"] = hi; j["IA_measured"] = iam;
             j["coder"] = { {"K", pr.conv_K}, {"octal_code", pr.conv_octal} };
             if (!a.stamp.empty()) j["timestamp"] = a.stamp;
+            if (algo != msprs::Bcjr::map) j["bcjr"] = msprs::to_string(algo);
             msprs::mkdir_p(a.out);
-            std::ofstream of(a.out + "/coder_K" + std::to_string(pr.conv_K) + ".json");
+            std::ofstream of(a.out + "/coder_K" + std::to_string(pr.conv_K) + bcjr_suffix(algo) + ".json");
             of << j.dump(2) << "\n";
         }
         return 0;

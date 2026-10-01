@@ -33,11 +33,18 @@ msprs --mode exit-decoder
 msprs --mode bounds
 msprs --mode alphabet      --L0 3 --family balanced
 msprs --mode eye           --L0 3 --family balanced --ebn0 15.11
+msprs --mode timing        --L0 3 --family balanced --ebn0 4
 msprs --mode params
 ```
 
 Add `--out results/ber` to a sweep to write JSON records instead of only
 printing a table.
+
+`--bcjr map|log-map|max-log-map` picks the algorithm of both BCJRs, the
+equalizer's and the outer decoder's, in every mode. `map` is exact and the
+default; records of the other two carry a `_logmap` or `_maxlog` suffix.
+`timing` runs all three on one thread and prints the time of each pass and of a
+whole frame, with the speed-up over MAP.
 
 `modtest`, `demodtest`, `tdemodtest`, `enctest` and `dectest` read stdin and
 print their output, so each block can be diffed against another implementation

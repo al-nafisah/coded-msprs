@@ -28,6 +28,7 @@
 
 #include <aff3ct.hpp>
 
+#include "MSPRS/Bcjr.hpp"
 #include "MSPRS/Taps.hpp"
 
 namespace msprs
@@ -35,9 +36,11 @@ namespace msprs
 
 namespace detail
 {
-constexpr double NEG_INF = -std::numeric_limits<double>::infinity();
+constexpr double NEG_INF = bcjr::NEG_INF;
 
-//! log(e^a + e^b), stable. Mirrors nsm/_math.py::log_add including its cutoff.
+// The FTN reference modem still runs its own exact log-domain BCJR on these.
+
+//! log(e^a + e^b), stable.
 inline double log_add(const double a, const double b)
 {
     if (a == NEG_INF) return b;
@@ -48,7 +51,6 @@ inline double log_add(const double a, const double b)
 }
 
 //! log P(bit) given an LLR in AFF3CT sign (positive -> bit 0).
-//! Mirrors nsm/_math.py::llr_to_log_prob, saturations included.
 inline double log_p(const double llr, const int bit)
 {
     const double l = (bit == 0) ? llr : -llr;
@@ -117,6 +119,10 @@ class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
 
     Modem_MSPRS<B, R, Q>* clone() const override { return new Modem_MSPRS<B, R, Q>(*this); }
 
+    //! MAP (the default), log-MAP or max-log-MAP.
+    void set_bcjr(const Bcjr a) { algo = a; }
+    Bcjr get_bcjr() const { return algo; }
+
     //! True when trellis step `t` still admits a free x0 bit.
     bool b0_free(const int t) const { return t < n0; }
     //! False only for the final step of an even-L0 trellis, whose x1 is known.
@@ -180,13 +186,21 @@ class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
      */
     void bcjr(const double sigma, const Q* Y, const Q* La, Q* Lout, const bool extrinsic)
     {
-        using detail::log_add;
-        using detail::log_p;
-        using detail::NEG_INF;
+        switch (algo)
+        {
+            case Bcjr::map: bcjr_t<bcjr::Map>(sigma, Y, La, Lout, extrinsic); break;
+            case Bcjr::log_map: bcjr_t<bcjr::LogMap>(sigma, Y, La, Lout, extrinsic); break;
+            case Bcjr::max_log_map: bcjr_t<bcjr::MaxLogMap>(sigma, Y, La, Lout, extrinsic); break;
+        }
+    }
 
+    // S is the arithmetic (see Bcjr.hpp).
+    template<class S>
+    void bcjr_t(const double sigma, const Q* Y, const Q* La, Q* Lout, const bool extrinsic)
+    {
         const double inv2s2 = 1.0 / (2.0 * sigma * sigma);
 
-        std::fill(gamma.begin(), gamma.end(), NEG_INF);
+        std::fill(gamma.begin(), gamma.end(), S::zero());
 
         int k = 0;
         for (int t = 0; t < L; t++)
@@ -199,10 +213,10 @@ class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
             const int b1_hi = b1_free(t) ? 1 : 0;
 
             // The a-priori term depends only on (t, bit), not on the state, so
-            // it is computed twice per symbol instead of 2*M times. log_p is a
-            // log1p+exp pair, which dominates the gamma loop otherwise.
-            const double ap0[2] = { b0_free(t) ? log_p(la0, 0) : 0.0, b0_free(t) ? log_p(la0, 1) : 0.0 };
-            const double ap1[2] = { b1_free(t) ? log_p(la1, 0) : 0.0, b1_free(t) ? log_p(la1, 1) : 0.0 };
+            // it is computed twice per symbol instead of 2*M times. In MAP and
+            // log-MAP it costs an exp, which would dominate the gamma loop.
+            const double ap0[2] = { b0_free(t) ? S::apriori(la0, 0) : S::one(), b0_free(t) ? S::apriori(la0, 1) : S::one() };
+            const double ap1[2] = { b1_free(t) ? S::apriori(la1, 0) : S::one(), b1_free(t) ? S::apriori(la1, 1) : S::one() };
 
             // Final step of an even-L0 trellis: both bits are known, and the
             // Python reference drops the sample outright (msprs.py:231 sets
@@ -218,61 +232,63 @@ class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
                 for (int b0 = 0; b0 <= b0_hi; b0++)
                     for (int b1 = 0; b1 <= b1_hi; b1++)
                     {
-                        if (drop_sample) { gamma[idx(t, s, b0, b1)] = 0.0; continue; }
+                        if (drop_sample) { gamma[idx(t, s, b0, b1)] = S::one(); continue; }
                         const double d           = y - symf[((size_t)s * 2 + b0) * 2 + b1];
-                        gamma[idx(t, s, b0, b1)] = -d * d * inv2s2 + ap0[b0] + ap1[b1];
+                        gamma[idx(t, s, b0, b1)] = S::mul(S::mul(S::from_log(-d * d * inv2s2), ap0[b0]), ap1[b1]);
                     }
         }
 
         // alpha: state 0 is the all-boundary-bit state at t=0.
-        std::fill(alpha.begin(), alpha.end(), NEG_INF);
-        alpha[0] = 0.0;
+        std::fill(alpha.begin(), alpha.end(), S::zero());
+        alpha[0] = S::one();
         for (int t = 0; t < L; t++)
         {
-            double norm = NEG_INF;
-            for (int ns = 0; ns < M; ns++) alpha[(size_t)(t + 1) * M + ns] = NEG_INF;
+            double norm = S::zero();
+            for (int ns = 0; ns < M; ns++) alpha[(size_t)(t + 1) * M + ns] = S::zero();
             for (int s = 0; s < M; s++)
             {
                 const double a = alpha[(size_t)t * M + s];
-                if (a == NEG_INF) continue;
+                if (a == S::zero()) continue;
                 for (int b0 = 0; b0 < 2; b0++)
                 {
-                    const double g = log_add(gamma[idx(t, s, b0, 0)], gamma[idx(t, s, b0, 1)]);
-                    if (g == NEG_INF) continue;
+                    const double g = S::add(gamma[idx(t, s, b0, 0)], gamma[idx(t, s, b0, 1)]);
+                    if (g == S::zero()) continue;
                     const int ns                    = nxt[(size_t)s * 2 + b0];
-                    alpha[(size_t)(t + 1) * M + ns] = log_add(alpha[(size_t)(t + 1) * M + ns], a + g);
+                    alpha[(size_t)(t + 1) * M + ns] = S::add(alpha[(size_t)(t + 1) * M + ns], S::mul(a, g));
                 }
             }
-            for (int ns = 0; ns < M; ns++) norm = log_add(alpha[(size_t)(t + 1) * M + ns], norm);
-            if (norm != NEG_INF)
+            for (int ns = 0; ns < M; ns++) norm = S::add(alpha[(size_t)(t + 1) * M + ns], norm);
+            if (norm != S::zero())
                 for (int ns = 0; ns < M; ns++)
-                    if (alpha[(size_t)(t + 1) * M + ns] != NEG_INF) alpha[(size_t)(t + 1) * M + ns] -= norm;
+                    if (alpha[(size_t)(t + 1) * M + ns] != S::zero())
+                        alpha[(size_t)(t + 1) * M + ns] = S::div(alpha[(size_t)(t + 1) * M + ns], norm);
         }
 
         // beta: the flushed trellis terminates in state 0.
-        std::fill(beta.begin(), beta.end(), NEG_INF);
-        beta[(size_t)L * M] = 0.0;
+        std::fill(beta.begin(), beta.end(), S::zero());
+        beta[(size_t)L * M] = S::one();
         for (int t = L; t > 0; t--)
         {
-            double norm = NEG_INF;
+            double norm = S::zero();
             for (int s = 0; s < M; s++)
             {
-                double acc = NEG_INF;
+                double acc = S::zero();
                 for (int b0 = 0; b0 < 2; b0++)
                 {
-                    const double g = log_add(gamma[idx(t - 1, s, b0, 0)], gamma[idx(t - 1, s, b0, 1)]);
-                    if (g == NEG_INF) continue;
+                    const double g = S::add(gamma[idx(t - 1, s, b0, 0)], gamma[idx(t - 1, s, b0, 1)]);
+                    if (g == S::zero()) continue;
                     const int    ns = nxt[(size_t)s * 2 + b0];
                     const double bn = beta[(size_t)t * M + ns];
-                    if (bn == NEG_INF) continue;
-                    acc = log_add(acc, bn + g);
+                    if (bn == S::zero()) continue;
+                    acc = S::add(acc, S::mul(bn, g));
                 }
                 beta[(size_t)(t - 1) * M + s] = acc;
-                norm                          = log_add(acc, norm);
+                norm                          = S::add(acc, norm);
             }
-            if (norm != NEG_INF)
+            if (norm != S::zero())
                 for (int s = 0; s < M; s++)
-                    if (beta[(size_t)(t - 1) * M + s] != NEG_INF) beta[(size_t)(t - 1) * M + s] -= norm;
+                    if (beta[(size_t)(t - 1) * M + s] != S::zero())
+                        beta[(size_t)(t - 1) * M + s] = S::div(beta[(size_t)(t - 1) * M + s], norm);
         }
 
         // Soft output. p[b0][b1] accumulates alpha + gamma + beta over the
@@ -280,37 +296,37 @@ class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
         k = 0;
         for (int t = 0; t < L; t++)
         {
-            double p[2][2] = { { NEG_INF, NEG_INF }, { NEG_INF, NEG_INF } };
+            double p[2][2] = { { S::zero(), S::zero() }, { S::zero(), S::zero() } };
             for (int s = 0; s < M; s++)
             {
                 const double a = alpha[(size_t)t * M + s];
-                if (a == NEG_INF) continue;
+                if (a == S::zero()) continue;
                 for (int b0 = 0; b0 < 2; b0++)
                 {
                     const int    ns = nxt[(size_t)s * 2 + b0];
                     const double bn = beta[(size_t)(t + 1) * M + ns];
-                    if (bn == NEG_INF) continue;
+                    if (bn == S::zero()) continue;
                     for (int b1 = 0; b1 < 2; b1++)
                     {
                         const double g = gamma[idx(t, s, b0, b1)];
-                        if (g == NEG_INF) continue;
-                        p[b0][b1] = log_add(p[b0][b1], a + g + bn);
+                        if (g == S::zero()) continue;
+                        p[b0][b1] = S::add(p[b0][b1], S::mul(S::mul(a, g), bn));
                     }
                 }
             }
 
             if (b0_free(t))
             {
-                const double lp0 = log_add(p[0][0], p[0][1]);
-                const double lp1 = log_add(p[1][0], p[1][1]);
-                Lout[k]          = clip(lp0 - lp1 - (extrinsic ? (double)La[k] : 0.0));
+                const double lp0 = S::add(p[0][0], p[0][1]);
+                const double lp1 = S::add(p[1][0], p[1][1]);
+                Lout[k]          = clip(S::llr(lp0, lp1) - (extrinsic ? (double)La[k] : 0.0));
                 k++;
             }
             if (b1_free(t))
             {
-                const double lp0 = log_add(p[0][0], p[1][0]);
-                const double lp1 = log_add(p[0][1], p[1][1]);
-                Lout[k]          = clip(lp0 - lp1 - (extrinsic ? (double)La[k] : 0.0));
+                const double lp0 = S::add(p[0][0], p[1][0]);
+                const double lp1 = S::add(p[0][1], p[1][1]);
+                Lout[k]          = clip(S::llr(lp0, lp1) - (extrinsic ? (double)La[k] : 0.0));
                 k++;
             }
         }
@@ -339,6 +355,7 @@ class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
     std::vector<double> symf; //!< full constellation,   indexed [(s*2 + b0)*2 + b1]
     std::vector<int>    nxt;  //!< next state,           indexed [s*2 + b0]
     std::vector<double> gamma, alpha, beta;
+    Bcjr                algo = Bcjr::map;
 };
 
 } // namespace msprs

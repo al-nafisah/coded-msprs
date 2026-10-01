@@ -27,6 +27,7 @@ namespace msprs
 
 struct ExitConfig
 {
+    Bcjr   algo     = Bcjr::map;
     int    bits     = 4998;
     int    n_ia     = 100;
     int    n_trials = 50;
@@ -53,7 +54,11 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
             (cfg.ia_lo + (cfg.ia_hi - cfg.ia_lo) * (double)i / (double)(cfg.n_ia - 1));
 
     std::vector<std::unique_ptr<Modem_MSPRS<>>> mdm;
-    for (int t = 0; t < nth; t++) mdm.emplace_back(new Modem_MSPRS<>(K, taps));
+    for (int t = 0; t < nth; t++)
+    {
+        mdm.emplace_back(new Modem_MSPRS<>(K, taps));
+        mdm.back()->set_bcjr(cfg.algo);
+    }
 
     std::vector<ExitPoint> out;
     for (double ebn0 = cfg.ebn0_min; ebn0 < cfg.ebn0_max; ebn0 += cfg.ebn0_step)
@@ -127,10 +132,12 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
 struct DecoderExitPoint { double ia, ie_avg, ie_hist, ia_measured; };
 
 inline std::vector<DecoderExitPoint> decoder_exit(const NSC_Trellis& tr, int source_bits,
-                                                  int n_ia, int n_trials, int seed = 0)
+                                                  int n_ia, int n_trials, int seed = 0,
+                                                  Bcjr algo = Bcjr::map)
 {
     Encoder_NSC<>      enc(source_bits, tr);
     Decoder_NSC_SISO<> dec(source_bits, tr);
+    dec.set_bcjr(algo);
     const int N = tr.codeword_length(source_bits);
 
     std::mt19937_64 gen((uint64_t)seed);

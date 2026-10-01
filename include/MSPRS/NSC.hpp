@@ -13,12 +13,13 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <aff3ct.hpp>
+
+#include "MSPRS/Bcjr.hpp"
 
 namespace msprs
 {
@@ -142,6 +143,9 @@ class Decoder_NSC_SISO : public aff3ct::module::Decoder_SISO<B, R>
 
     Decoder_NSC_SISO<B, R>* clone() const override { return new Decoder_NSC_SISO<B, R>(*this); }
 
+    //! MAP (the default), log-MAP or max-log-MAP.
+    void set_bcjr(const Bcjr a) { algo = a; }
+
     /*!
      * \brief Extrinsic LLRs and hard decisions from a single BCJR pass.
      *
@@ -164,32 +168,26 @@ class Decoder_NSC_SISO : public aff3ct::module::Decoder_SISO<B, R>
     }
 
   private:
-    static constexpr double NEG_INF = -std::numeric_limits<double>::infinity();
-
-    static double log_add(const double a, const double b)
-    {
-        if (a == NEG_INF) return b;
-        if (b == NEG_INF) return a;
-        const double d = std::abs(a - b), m = a > b ? a : b;
-        return d > 20.0 ? m : m + std::log1p(std::exp(-d));
-    }
-
-    //! log P(bit) from an LLR in AFF3CT sign (positive -> bit 0).
-    static double log_p(const double llr, const int bit)
-    {
-        const double l = (bit == 0) ? llr : -llr;
-        if (l > 10.0) return -1e-6;
-        if (l < -10.0) return l;
-        return l - std::log1p(std::exp(l));
-    }
-
     void bcjr(const R* Lin, R* Lext, B* V_K)
+    {
+        switch (algo)
+        {
+            case Bcjr::map: bcjr_t<bcjr::Map>(Lin, Lext, V_K); break;
+            case Bcjr::log_map: bcjr_t<bcjr::LogMap>(Lin, Lext, V_K); break;
+            case Bcjr::max_log_map: bcjr_t<bcjr::MaxLogMap>(Lin, Lext, V_K); break;
+        }
+    }
+
+    // S is the arithmetic (see Bcjr.hpp).
+    template<class S>
+    void bcjr_t(const R* Lin, R* Lext, B* V_K)
     {
         const int n_out = trellis.n_out;
 
-        // log_p is a log1p+exp pair and depends only on (t, j, bit), never on
-        // the state, so it is evaluated 2*n_out times per step rather than
-        // 2*M*n_out times. This is the hot loop of the turbo iteration.
+        // The a priori depends only on (t, j, bit), never on the state, so it
+        // is evaluated 2*n_out times per step rather than 2*M*n_out times. In
+        // MAP and log-MAP it costs an exp; this is the hot loop of the turbo
+        // iteration.
         std::vector<double> lp(2 * (size_t)n_out);
         for (int t = 0; t < L; t++)
         {
@@ -197,92 +195,94 @@ class Decoder_NSC_SISO : public aff3ct::module::Decoder_SISO<B, R>
             for (int j = 0; j < n_out; j++)
             {
                 const double li      = std::max(-50.0, std::min(50.0, (double)Lin[n_out * t + j]));
-                lp[(size_t)j * 2]     = log_p(li, 0);
-                lp[(size_t)j * 2 + 1] = log_p(li, 1);
+                lp[(size_t)j * 2]     = S::apriori(li, 0);
+                lp[(size_t)j * 2 + 1] = S::apriori(li, 1);
             }
             for (int s = 0; s < M; s++)
             {
-                gamma[idx(t, s, 1)] = NEG_INF;
+                gamma[idx(t, s, 1)] = S::zero();
                 for (int u = 0; u <= u_hi; u++)
                 {
                     const std::vector<int>& ob  = trellis.out_bits[(size_t)s * 2 + u];
-                    double                  acc = 0.0;
-                    for (int j = 0; j < n_out; j++) acc += lp[(size_t)j * 2 + ob[j]];
+                    double                  acc = S::one();
+                    for (int j = 0; j < n_out; j++) acc = S::mul(acc, lp[(size_t)j * 2 + ob[j]]);
                     gamma[idx(t, s, u)] = acc;
                 }
             }
         }
 
-        std::fill(alpha.begin(), alpha.end(), NEG_INF);
-        alpha[0] = 0.0;
+        std::fill(alpha.begin(), alpha.end(), S::zero());
+        alpha[0] = S::one();
         for (int t = 0; t < L; t++)
         {
-            double norm = NEG_INF;
-            for (int ns = 0; ns < M; ns++) alpha[(size_t)(t + 1) * M + ns] = NEG_INF;
+            double norm = S::zero();
+            for (int ns = 0; ns < M; ns++) alpha[(size_t)(t + 1) * M + ns] = S::zero();
             for (int s = 0; s < M; s++)
             {
                 const double a = alpha[(size_t)t * M + s];
-                if (a == NEG_INF) continue;
+                if (a == S::zero()) continue;
                 for (int u = 0; u < 2; u++)
                 {
                     const double g = gamma[idx(t, s, u)];
-                    if (g == NEG_INF) continue;
+                    if (g == S::zero()) continue;
                     const int ns                    = trellis.nxt[(size_t)s * 2 + u];
-                    alpha[(size_t)(t + 1) * M + ns] = log_add(alpha[(size_t)(t + 1) * M + ns], a + g);
+                    alpha[(size_t)(t + 1) * M + ns] = S::add(alpha[(size_t)(t + 1) * M + ns], S::mul(a, g));
                 }
             }
-            for (int ns = 0; ns < M; ns++) norm = log_add(alpha[(size_t)(t + 1) * M + ns], norm);
-            if (norm != NEG_INF)
+            for (int ns = 0; ns < M; ns++) norm = S::add(alpha[(size_t)(t + 1) * M + ns], norm);
+            if (norm != S::zero())
                 for (int ns = 0; ns < M; ns++)
-                    if (alpha[(size_t)(t + 1) * M + ns] != NEG_INF) alpha[(size_t)(t + 1) * M + ns] -= norm;
+                    if (alpha[(size_t)(t + 1) * M + ns] != S::zero())
+                        alpha[(size_t)(t + 1) * M + ns] = S::div(alpha[(size_t)(t + 1) * M + ns], norm);
         }
 
-        std::fill(beta.begin(), beta.end(), NEG_INF);
-        beta[(size_t)L * M] = 0.0; // zero tail terminates the trellis in state 0
+        std::fill(beta.begin(), beta.end(), S::zero());
+        beta[(size_t)L * M] = S::one(); // zero tail terminates the trellis in state 0
         for (int t = L; t > 0; t--)
         {
-            double norm = NEG_INF;
+            double norm = S::zero();
             for (int s = 0; s < M; s++)
             {
-                double acc = NEG_INF;
+                double acc = S::zero();
                 for (int u = 0; u < 2; u++)
                 {
                     const double g = gamma[idx(t - 1, s, u)];
-                    if (g == NEG_INF) continue;
+                    if (g == S::zero()) continue;
                     const double bn = beta[(size_t)t * M + trellis.nxt[(size_t)s * 2 + u]];
-                    if (bn == NEG_INF) continue;
-                    acc = log_add(acc, bn + g);
+                    if (bn == S::zero()) continue;
+                    acc = S::add(acc, S::mul(bn, g));
                 }
                 beta[(size_t)(t - 1) * M + s] = acc;
-                norm                          = log_add(acc, norm);
+                norm                          = S::add(acc, norm);
             }
-            if (norm != NEG_INF)
+            if (norm != S::zero())
                 for (int s = 0; s < M; s++)
-                    if (beta[(size_t)(t - 1) * M + s] != NEG_INF) beta[(size_t)(t - 1) * M + s] -= norm;
+                    if (beta[(size_t)(t - 1) * M + s] != S::zero())
+                        beta[(size_t)(t - 1) * M + s] = S::div(beta[(size_t)(t - 1) * M + s], norm);
         }
 
         std::vector<double> lp0(n_out), lp1(n_out);
         for (int t = 0; t < L; t++)
         {
-            std::fill(lp0.begin(), lp0.end(), NEG_INF);
-            std::fill(lp1.begin(), lp1.end(), NEG_INF);
-            double u0 = NEG_INF, u1 = NEG_INF;
+            std::fill(lp0.begin(), lp0.end(), S::zero());
+            std::fill(lp1.begin(), lp1.end(), S::zero());
+            double u0 = S::zero(), u1 = S::zero();
 
             for (int s = 0; s < M; s++)
             {
                 const double a = alpha[(size_t)t * M + s];
-                if (a == NEG_INF) continue;
+                if (a == S::zero()) continue;
                 for (int u = 0; u < 2; u++)
                 {
                     const double g = gamma[idx(t, s, u)];
-                    if (g == NEG_INF) continue;
+                    if (g == S::zero()) continue;
                     const double bn = beta[(size_t)(t + 1) * M + trellis.nxt[(size_t)s * 2 + u]];
-                    if (bn == NEG_INF) continue;
-                    const double v = a + g + bn;
-                    (u == 0 ? u0 : u1) = log_add(u == 0 ? u0 : u1, v);
+                    if (bn == S::zero()) continue;
+                    const double v = S::mul(S::mul(a, g), bn);
+                    (u == 0 ? u0 : u1) = S::add(u == 0 ? u0 : u1, v);
                     for (int j = 0; j < n_out; j++)
                         (trellis.out_bits[(size_t)s * 2 + u][j] == 0 ? lp0[j] : lp1[j]) =
-                          log_add(trellis.out_bits[(size_t)s * 2 + u][j] == 0 ? lp0[j] : lp1[j], v);
+                          S::add(trellis.out_bits[(size_t)s * 2 + u][j] == 0 ? lp0[j] : lp1[j], v);
                 }
             }
 
@@ -290,8 +290,8 @@ class Decoder_NSC_SISO : public aff3ct::module::Decoder_SISO<B, R>
                 for (int j = 0; j < n_out; j++)
                 {
                     const int    n = n_out * t + j;
-                    const double e = (lp0[j] - lp1[j]) - (double)Lin[n];
-                    Lext[n]        = (R)std::max(-50.0, std::min(50.0, e));
+                    const double e = S::llr(lp0[j], lp1[j]) - (double)Lin[n];
+                    Lext[n]        = (e == e) ? (R)std::max(-50.0, std::min(50.0, e)) : (R)0; // NaN: both impossible
                 }
 
             if (V_K != nullptr && t < this->K) V_K[t] = (B)((u0 > u1) ? 0 : 1);
@@ -304,6 +304,7 @@ class Decoder_NSC_SISO : public aff3ct::module::Decoder_SISO<B, R>
     const int           L; //!< trellis steps, K information + memory tail
     const int           M;
     std::vector<double> gamma, alpha, beta;
+    Bcjr                algo = Bcjr::map;
 };
 
 } // namespace msprs
