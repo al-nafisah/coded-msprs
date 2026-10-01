@@ -80,6 +80,16 @@ between them is the tunnel the turbo loop climbs.
   <img src="figures/exit_turbo_gain.png" width="92%">
 </p>
 
+## Learned Equaliser
+
+A small network in place of the BCJR, trained on the transmitted bits and run
+inside the same turbo loop. On the Gaussian channel it trails the BCJR by about
+0.9 dB at a BER of 1e-4. It is meant for the radio link, where the received
+signal departs from the Gaussian model the BCJR assumes.
+
+<p align="center">
+  <img src="figures/siso_learned.png" width="80%">
+</p>
 
 ## Run It
 
