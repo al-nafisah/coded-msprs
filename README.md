@@ -26,6 +26,26 @@ The chain the simulator runs: encode, interleave, modulate, then a receiver that
   <img src="figures/system_chain.png" width="94%">
 </p>
 
+Both BCJRs, the equalizer's and the convolutional decoder's, run one of three
+algorithms, chosen with `--bcjr`. MAP works on probabilities and is exact; it
+is the default. log-MAP works on their logarithms and reads the Jacobian
+correction from a table. max-log-MAP drops the correction. For `L0 = 3` with 7
+iterations, balanced / unbalanced, on one thread of a Ryzen 5 3600X:
+
+| `--bcjr` | Eb/N0 at BER 1e-3 | Eb/N0 at BER 1e-4 | Time per frame | Speed vs MAP |
+|---|---|---|---|---|
+| `map` (default) | 3.89 / 4.06 dB | 4.91 / 5.13 dB | 11.3 / 11.8 ms | 1.00 / 1.00× |
+| `log-map` | 3.88 / 4.03 dB | 4.89 / 5.21 dB | 16.8 / 17.8 ms | 0.68 / 0.67× |
+| `max-log-map` | 4.38 / 4.06 dB | 4.91 / 5.21 dB | 5.8 / 5.9 ms | 1.95 / 2.00× |
+
+Differences under 0.1 dB are Monte Carlo scatter. max-log-MAP loses half a
+decibel where the balanced loop starts to converge, and nothing once it has.
+log-MAP is slower than MAP here: on a CPU a multiply-add costs no more than an
+add, while every log-domain addition still needs a comparison and a table
+lookup. Its advantage belongs to fixed-point hardware. A frame is 4998
+information bits and 8 passes of each BCJR; `msprs --mode timing --L0 3 --ebn0 4`
+reproduces the times.
+
 Received symbols on the I/Q plane, measured over the air between the two
 radios at 15 dB. White crosses mark the ideal points; the scatter around them is
 what the equalizer works with.
