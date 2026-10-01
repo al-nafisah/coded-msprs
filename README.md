@@ -1,8 +1,16 @@
 # Turbo-Equalized MS-PRS
 
-**Multi-Stream Partial Response Signaling (MS-PRS)** is a modulation scheme at the Nyquist rate that adds controlled intersymbol interference through short FIR filters across two bipolar sub-streams, instead of compressing the symbol period the way faster-than-Nyquist signaling does. MS-PRS at Rate 2 carries two bits per channel use. This project uses [AFF3CT](https://github.com/aff3ct/aff3ct) for efficient BER simulations.
+**Multi-Stream Partial Response Signaling (MS-PRS)** is a modulation scheme at the Nyquist rate that adds controlled intersymbol interference through short FIR filters across two bipolar sub-streams, instead of compressing the symbol period the way faster-than-Nyquist signaling does. MS-PRS at Rate 2 carries two bits per channel use. This project uses [AFF3CT](https://github.com/aff3ct/aff3ct) for efficient BER simulations and tests the scheme over the air between two ADALM-Pluto software-defined radios.
 
-Inside that modulator, the interleaved bits split into two bipolar sub-streams. One runs through
+The experimental setup: the transmitter (right) and the receiver (left) each
+feed a log-periodic antenna, and the two antennas face each other. The link runs
+at 448 MHz, and each radio has its own crystal.
+
+<p align="center">
+  <img src="figures/ota_setup.png" width="80%">
+</p>
+
+Inside the modulator, the interleaved bits split into two bipolar sub-streams. One runs through
 an `L0`-tap FIR filter `h0`, which is where the controlled ISI comes from; the other passes a
 single tap. The two are scaled and summed into one Nyquist-rate symbol, carrying two bits between
 them. The gains set the energy split, `eta_0 + eta_1 = Es`: the balanced family divides it evenly,
@@ -18,7 +26,7 @@ The chain the simulator runs: encode, interleave, modulate, then a receiver that
   <img src="figures/system_chain.png" width="94%">
 </p>
 
-Received symbols on the I/Q plane, measured over the air between two ADALM-Pluto
+Received symbols on the I/Q plane, measured over the air between the two
 radios at 15 dB. White crosses mark the ideal points; the scatter around them is
 what the equalizer works with.
 
