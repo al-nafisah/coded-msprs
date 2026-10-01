@@ -17,6 +17,7 @@
 
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
+#include "MSPRS/Student.hpp"
 #include "MSPRS/Taps.hpp"
 
 namespace msprs
@@ -25,6 +26,7 @@ namespace msprs
 struct SweepConfig
 {
     Bcjr   algo     = Bcjr::map;   // both the equaliser and the outer decoder
+    const Student* siso = nullptr;   // learned equaliser in place of the BCJR
     bool   coded    = true;
     int    K        = 4998;   // information bits per frame
     int    iters    = 7;      // turbo iterations; the loop runs iters+1 passes
@@ -83,8 +85,10 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
 {
     const int N_in  = cfg.coded ? trellis.codeword_length(cfg.K) : cfg.K;
     const int N_mod = Modem_MSPRS<>::size_mod(N_in, taps.L0);
-    const double m  = 2.0;
     const double Rc = cfg.coded ? 0.5 : 1.0;
+
+    std::unique_ptr<Window> win;
+    if (cfg.siso) win.reset(new Window(N_in, taps));
 
     const int n_threads = std::max(1, cfg.threads);
     aff3ct::tools::Interleaver_core_random<> itl_core(N_in, cfg.itl_seed, false);
@@ -107,7 +111,13 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
             {
                 c.modem  .modulate  (c.ref, c.sym);
                 c.channel.add_noise (CP, c.sym, c.rx);
-                c.modem  .demodulate(CP, c.rx, c.Le_i);
+                if (cfg.siso)
+                {
+                    std::fill(c.La_i.begin(), c.La_i.end(), 0.f);
+                    cfg.siso->tdemodulate(*win, CP[0], c.rx, c.La_i, c.Le_i);
+                }
+                else
+                    c.modem.demodulate(CP, c.rx, c.Le_i);
                 for (int i = 0; i < cfg.K; i++) c.dec[i] = (c.Le_i[i] < 0.f) ? 1 : 0;
             }
             else
@@ -120,7 +130,8 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
                 std::fill(c.La_i.begin(), c.La_i.end(), 0.f);
                 for (int it = 0; it <= cfg.iters; it++)
                 {
-                    c.modem  .tdemodulate (CP, c.rx, c.La_i, c.Le_i);
+                    if (cfg.siso) cfg.siso->tdemodulate(*win, CP[0], c.rx, c.La_i, c.Le_i);
+                    else          c.modem.tdemodulate(CP, c.rx, c.La_i, c.Le_i);
                     c.itl_l  .deinterleave(c.Le_i, c.Le_n);
                     c.decoder.decode_both (c.Le_n.data(), c.De_n.data(), c.dec.data());
                     c.itl_l  .interleave  (c.De_n, c.La_i);
@@ -143,9 +154,7 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
     std::vector<Point> out;
     for (double ebn0 = cfg.ebn0_min; ebn0 < cfg.ebn0_max; ebn0 += cfg.ebn0_step)
     {
-        const double esn0  = ebn0 + 10.0 * std::log10(m * Rc);
-        const float  sigma = (float)std::sqrt(1.0 / (2.0 * std::pow(10.0, esn0 / 10.0)));
-        const std::vector<float> CP = { sigma };
+        const std::vector<float> CP = { (float)noise_sigma(ebn0, Rc) };
 
         Point total;
         total.eb_no_db = ebn0;

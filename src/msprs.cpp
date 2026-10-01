@@ -1,6 +1,7 @@
 // MS-PRS simulation driver.
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include "MSPRS/Modem_MSPRS.hpp"
@@ -231,6 +232,10 @@ int main(int argc, char** argv)
         cfg.ebn0_step = a.step;
         cfg.algo      = algo;
 
+        std::unique_ptr<msprs::Student> net;
+        if (!a.siso.empty()) net.reset(new msprs::Student(a.siso));
+        cfg.siso = net.get();
+
         std::cout << "#     Eb/N0 |        FRA |         BE |       BER |    s\n";
         for (const auto& pt : msprs::run_sweep(cfg, taps, tr))
         {
@@ -254,10 +259,11 @@ int main(int argc, char** argv)
                 meta["metric_convention"] = "llr-2sigma2";
                 if (cfg.coded) { meta["iters"] = cfg.iters; meta["code"] = "conv_K3_57"; }
                 if (algo != msprs::Bcjr::map) meta["bcjr"] = msprs::to_string(algo);
+                if (net) meta["siso"] = a.siso.substr(a.siso.find_last_of('/') + 1);
                 const std::string scheme = a.scheme.empty()
                     ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family +
                        (cfg.coded ? "_conv_K3_" + std::to_string(cfg.iters) + "iters" : "_uncoded") +
-                       bcjr_suffix(algo))
+                       bcjr_suffix(algo) + (net ? "_siso" : ""))
                     : a.scheme;
                 msprs::write_point(a.out, scheme, pt, meta, "aff3ct-4.1.2", a.stamp);
             }
@@ -274,6 +280,10 @@ int main(int argc, char** argv)
         cfg.threads = a.threads; cfg.fresh_rx = a.fresh_rx;
         cfg.ebn0_min = a.lo; cfg.ebn0_max = a.hi; cfg.ebn0_step = a.step;
         cfg.algo = algo;
+
+        std::unique_ptr<msprs::Student> net;
+        if (!a.siso.empty()) net.reset(new msprs::Student(a.siso));
+        cfg.siso = net.get();
 
         std::cout << "# exit L0=" << a.L0 << " " << a.family << " trials=" << cfg.n_trials
                   << " n_ia=" << cfg.n_ia << " bits=" << cfg.bits << "\n"
@@ -313,8 +323,10 @@ int main(int argc, char** argv)
                           {"metric_convention", "llr-2sigma2"} };
             if (!a.stamp.empty()) j["meta"]["timestamp"] = a.stamp;
             if (algo != msprs::Bcjr::map) j["meta"]["bcjr"] = msprs::to_string(algo);
+            if (net) j["meta"]["siso"] = a.siso.substr(a.siso.find_last_of('/') + 1);
             const std::string scheme = a.scheme.empty()
-                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family + bcjr_suffix(algo)) : a.scheme;
+                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family + bcjr_suffix(algo) + (net ? "_siso" : ""))
+                : a.scheme;
             msprs::mkdir_p(a.out);
             std::ofstream of(a.out + "/" + scheme + ".json");
             of << j.dump(2) << "\n";
@@ -389,62 +401,17 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // Uncoded BER with the learned equaliser in place of the BCJR, so the two
-    // are measured the same way.
-    if (a.mode == "siso-ber")
-    {
-        const auto pr = msprs::load_params(a.params);
-        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
-        if (a.siso.empty()) { std::cerr << "siso-ber needs --siso\n"; return 2; }
-        const msprs::Student net(a.siso, a.siso.substr(0, a.siso.rfind('.')) + ".norm");
-        const msprs::DatasetConfig dc;
-
-        const int N  = 2 * pr.source_bits;
-        const int Ns = msprs::Modem_MSPRS<>::size_mod(N, a.L0);
-        msprs::Modem_MSPRS<> modem(N, taps);
-        std::mt19937_64 gen((uint64_t)a.seed);
-        std::normal_distribution<double> nd(0.0, 1.0);
-
-        std::cout << "#     Eb/N0 |        FRA |         BE |       BER\n";
-        for (double ebn0 = a.lo; ebn0 < a.hi; ebn0 += a.step)
-        {
-            const double sigma = std::sqrt(1.0 / (2.0 * std::pow(10.0, ebn0 / 10.0)));
-            long long errs = 0, bits_cnt = 0;
-            std::vector<int> bits((size_t)N);
-            std::vector<float> sym((size_t)Ns), rx((size_t)Ns);
-            std::vector<float> la((size_t)N, 0.0f), ext((size_t)N);
-
-            for (int f = 0; f < a.frames; f++)
-            {
-                for (int i = 0; i < N; i++) bits[(size_t)i] = (int)(gen() & 1ull);
-                modem.modulate(bits, sym);
-                for (int i = 0; i < Ns; i++) rx[(size_t)i] = sym[(size_t)i] + (float)(sigma * nd(gen));
-                std::fill(la.begin(), la.end(), 0.0f);
-                net.tdemodulate(rx, la, ext, dc, (float)sigma);
-                for (int i = 0; i < N; i++)
-                    errs += ((ext[(size_t)i] < 0.0f ? 1 : 0) != bits[(size_t)i]);
-                bits_cnt += N;
-            }
-            std::cout << std::fixed << std::setprecision(2) << std::setw(11) << ebn0
-                      << " |" << std::setw(11) << a.frames << " |" << std::setw(11) << errs
-                      << " |" << std::scientific << std::setprecision(3) << std::setw(11)
-                      << (double)errs / (double)bits_cnt << "\n";
-        }
-        std::cout << "# done\n";
-        return 0;
-    }
-
     if (a.mode == "dataset")
     {
         const auto pr = msprs::load_params(a.params);
         const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
         msprs::DatasetConfig cfg;
-        cfg.bits = pr.source_bits; cfg.frames = a.frames; cfg.seed = a.seed;
+        cfg.bits = pr.coded_bits; cfg.frames = a.frames; cfg.seed = a.seed;
         cfg.ebn0_min = a.lo; cfg.ebn0_max = a.hi;
         if (a.out.empty()) { std::cerr << "dataset needs --out\n"; return 2; }
         msprs::mkdir_p(a.out);
-        const long long n = msprs::write_dataset(cfg, taps, a.out + "/X.bin", a.out + "/y.bin");
-        std::cout << "samples " << n << " features " << msprs::dataset_features(cfg) << "\n";
+        const long long n = msprs::write_dataset(cfg, taps, a.out);
+        std::cout << "samples " << n << " features " << msprs::Window(cfg.bits, taps).dim() << "\n";
         return 0;
     }
 

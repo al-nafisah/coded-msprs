@@ -60,6 +60,15 @@ inline double log_p(const double llr, const int bit)
 }
 } // namespace detail
 
+//! Noise sigma per real dimension at a given Eb/N0, for unit symbol energy and
+//! m = 2 bits per symbol: Es/N0 = Eb/N0 + 10 log10(2 Rc). Uncoded is Rc = 1;
+//! the coded schemes use Rc = 1/2, which makes Es/N0 = Eb/N0.
+inline double noise_sigma(const double ebn0_db, const double Rc)
+{
+    const double esn0_db = ebn0_db + 10.0 * std::log10(2.0 * Rc);
+    return std::sqrt(1.0 / (2.0 * std::pow(10.0, esn0_db / 10.0)));
+}
+
 template<typename B = int, typename R = float, typename Q = R>
 class Modem_MSPRS : public aff3ct::module::Modem<B, R, Q>
 {

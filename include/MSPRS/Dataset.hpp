@@ -1,18 +1,22 @@
-// Training data for a learned inner SISO equaliser.
+// What the learned inner SISO equaliser sees, and the data it is trained on.
 //
-// Each sample is one coded bit: a window of received symbols around it, a
-// window of a priori LLRs with the bit's own entry zeroed, and the extrinsic
-// LLR the exact BCJR produced. Training on that pair teaches the network to
-// imitate the BCJR without the trellis.
+// Each sample is one coded bit: a window of received symbols around the bit's
+// trellis step, a window of a priori LLRs with the bit's own entry zeroed, the
+// noise level, and the sub-stream the bit rides. The label is the transmitted
+// bit, and the network's output is trained as the extrinsic LLR. The exact
+// BCJR extrinsic is kept only to compare against; the network never learns to
+// copy it.
 //
 // LLRs are in the modem's convention, ln P(b=0)/P(b=1).
 #ifndef MSPRS_DATASET_HPP
 #define MSPRS_DATASET_HPP
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -23,44 +27,105 @@
 namespace msprs
 {
 
-struct DatasetConfig
+//! Trellis step of one bit, and whether it drives the FIR stream x0.
+struct Site
 {
-    int    bits      = 4998;
-    int    frames    = 200;
-    int    half_sym  = 4;     // received symbols each side
-    int    half_bit  = 8;     // a priori LLRs each side
-    double ebn0_min  = 2.0;   // a sample's Eb/N0 is drawn in this range
-    double ebn0_max  = 7.0;
-    int    stride    = 7;     // take every stride-th bit, to decorrelate samples
-    int    seed      = 1;
+    int  step;
+    bool fir;
 };
 
-inline int dataset_features(const DatasetConfig& c)
+//! Every bit's site, in the order the modulator consumes them: (b0, b1) per
+//! step while x0 is free, then b1 alone while h0 is flushed.
+inline std::vector<Site> bit_sites(const int N, const Taps& taps)
 {
-    return (2 * c.half_sym + 1) + (2 * c.half_bit + 1) + 2;  // + sigma, sub-stream
+    const Modem_MSPRS<> m(N, taps);
+    std::vector<Site>   s;
+    s.reserve((size_t)N);
+    for (int t = 0; t < Modem_MSPRS<>::size_mod(N, taps.L0); t++)
+    {
+        if (m.b0_free(t)) s.push_back({ t, true });
+        if (m.b1_free(t)) s.push_back({ t, false });
+    }
+    if ((int)s.size() != N)
+        throw std::runtime_error("bit_sites: trellis holds " + std::to_string(s.size()) +
+                                 " bits, expected " + std::to_string(N));
+    return s;
 }
 
-// Writes X.bin (n x D float32) and y.bin (n float32).
-inline long long write_dataset(const DatasetConfig& cfg, const Taps& taps,
-                               const std::string& x_path, const std::string& y_path)
+//! The network's input for one bit. The dataset writer and the receiver both
+//! build it here, so training and inference cannot drift apart.
+struct Window
 {
-    const int N  = cfg.bits;
-    const int Ns = Modem_MSPRS<>::size_mod(N, taps.L0);
-    const int D  = dataset_features(cfg);
+    int               half_sym = 4;   // received symbols each side of the bit's step
+    int               half_bit = 8;   // a priori LLRs each side of the bit
+    // A ReLU network extrapolates wildly beyond what it was trained on, and a
+    // converging turbo loop feeds back ever larger LLRs. Past this a bit is
+    // settled anyway, so the input stops growing here.
+    float             la_clip  = 20.0f;
+    std::vector<Site> sites;
+
+    Window(const int N, const Taps& taps) : sites(bit_sites(N, taps)) {}
+
+    int dim() const { return (2 * half_sym + 1) + (2 * half_bit + 1) + 2; }
+
+    void fill(const int i, const std::vector<float>& rx, const std::vector<float>& la,
+              const float sigma, float* x) const
+    {
+        const int   N  = (int)sites.size();
+        const int   Ns = (int)rx.size();
+        const Site& st = sites[(size_t)i];
+
+        int k = 0;
+        for (int s = -half_sym; s <= half_sym; s++)
+        {
+            const int t = st.step + s;
+            x[k++] = (t >= 0 && t < Ns) ? rx[(size_t)t] : 0.0f;
+        }
+        for (int b = -half_bit; b <= half_bit; b++)
+        {
+            const int j = i + b;
+            x[k++] = (b == 0 || j < 0 || j >= N) ? 0.0f : std::clamp(la[(size_t)j], -la_clip, la_clip);
+        }
+        x[k++] = sigma;   // the receiver knows its noise level
+        // Without the sub-stream the network cannot tell which relationship it
+        // is inverting: the FIR one with memory, or the single tap.
+        x[k++] = st.fir ? 1.0f : -1.0f;
+    }
+};
+
+struct DatasetConfig
+{
+    int    bits     = 10000;   // coded bits per frame, as in the turbo loop
+    int    frames   = 200;
+    double ebn0_min = 2.0;     // Eb/N0 of the coded system, drawn per frame
+    double ebn0_max = 7.0;
+    double ia_max   = 0.999;   // a priori MI drawn up to here; a converged loop sits near 1
+    int    stride   = 7;       // take every stride-th bit, to decorrelate samples
+    int    seed     = 1;
+};
+
+// Writes, under `dir`: X.bin (n x dim float32 features), b.bin (n uint8 bits)
+// and y.bin (n float32, the BCJR extrinsic, for comparison only).
+inline long long write_dataset(const DatasetConfig& cfg, const Taps& taps, const std::string& dir)
+{
+    const int    N  = cfg.bits;
+    const int    Ns = Modem_MSPRS<>::size_mod(N, taps.L0);
+    const Window win(N, taps);
+    const int    D  = win.dim();
 
     Modem_MSPRS<> modem(N, taps);
     std::mt19937_64 gen((uint64_t)cfg.seed);
     std::uniform_real_distribution<double> snr(cfg.ebn0_min, cfg.ebn0_max);
-    std::uniform_real_distribution<double> ia_pick(0.0, 0.95);
+    std::uniform_real_distribution<double> ia_pick(0.0, cfg.ia_max);
     std::normal_distribution<double> nd(0.0, 1.0);
 
-    std::ofstream xf(x_path, std::ios::binary), yf(y_path, std::ios::binary);
-    if (!xf || !yf) throw std::runtime_error("cannot open dataset output");
+    std::ofstream xf(dir + "/X.bin", std::ios::binary), bf(dir + "/b.bin", std::ios::binary);
+    std::ofstream yf(dir + "/y.bin", std::ios::binary);
+    if (!xf || !bf || !yf) throw std::runtime_error("cannot open dataset output in '" + dir + "'");
 
     std::vector<int>   bits((size_t)N);
     std::vector<float> sym((size_t)Ns), rx((size_t)Ns);
-    std::vector<float> la((size_t)N), ext((size_t)N);
-    std::vector<float> feat((size_t)D);
+    std::vector<float> la((size_t)N), ext((size_t)N), x((size_t)D);
 
     long long written = 0;
     for (int f = 0; f < cfg.frames; f++)
@@ -68,39 +133,24 @@ inline long long write_dataset(const DatasetConfig& cfg, const Taps& taps,
         for (int i = 0; i < N; i++) bits[(size_t)i] = (int)(gen() & 1ull);
         modem.modulate(bits, sym);
 
-        const double ebn0  = snr(gen);
-        const double sigma = std::sqrt(1.0 / (2.0 * std::pow(10.0, ebn0 / 10.0)));
+        const float sigma = (float)noise_sigma(snr(gen), 0.5);
         for (int i = 0; i < Ns; i++) rx[(size_t)i] = sym[(size_t)i] + (float)(sigma * nd(gen));
 
-        // Consistent-channel a priori at a random mutual information, so the
-        // network sees the whole range the turbo loop will walk through.
+        // Consistent Gaussian a priori at a random mutual information, so the
+        // network sees the whole range the turbo loop walks through.
         const double sa = i_inv(ia_pick(gen));
         for (int i = 0; i < N; i++)
+            la[(size_t)i] = (float)(0.5 * sa * sa * (1.0 - 2.0 * bits[(size_t)i]) + sa * nd(gen));
+
+        modem.tdemodulate(std::vector<float>{ sigma }, rx, la, ext);
+
+        // The offset moves with the frame, so the frame edges are sampled too.
+        for (int i = f % cfg.stride; i < N; i += cfg.stride)
         {
-            const double mean = 0.5 * sa * sa * (1.0 - 2.0 * bits[(size_t)i]);
-            la[(size_t)i] = (float)(mean + sa * nd(gen));
-        }
-
-        const std::vector<float> CP = { (float)sigma };
-        modem.tdemodulate(CP, rx, la, ext);
-
-        for (int i = cfg.half_bit; i < N - cfg.half_bit; i += cfg.stride)
-        {
-            const int c = i / 2;   // two bits per symbol
-            int k = 0;
-            for (int s = -cfg.half_sym; s <= cfg.half_sym; s++)
-            {
-                const int idx = c + s;
-                feat[(size_t)k++] = (idx >= 0 && idx < Ns) ? rx[(size_t)idx] : 0.0f;
-            }
-            for (int b = -cfg.half_bit; b <= cfg.half_bit; b++)
-                feat[(size_t)k++] = (b == 0) ? 0.0f : la[(size_t)(i + b)];
-            feat[(size_t)k++] = (float)sigma;   // the receiver knows its noise level
-            // Even bits ride the FIR stream, odd bits the memoryless one. Without
-            // this the network cannot tell which relationship it is inverting.
-            feat[(size_t)k++] = (i % 2 == 0) ? 1.0f : -1.0f;
-
-            xf.write(reinterpret_cast<const char*>(feat.data()), (std::streamsize)D * sizeof(float));
+            win.fill(i, rx, la, sigma, x.data());
+            const uint8_t b = (uint8_t)bits[(size_t)i];
+            xf.write(reinterpret_cast<const char*>(x.data()), (std::streamsize)(D * sizeof(float)));
+            bf.write(reinterpret_cast<const char*>(&b), 1);
             yf.write(reinterpret_cast<const char*>(&ext[(size_t)i]), sizeof(float));
             written++;
         }

@@ -20,6 +20,7 @@
 #include "MSPRS/Exit.hpp"
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
+#include "MSPRS/Student.hpp"
 #include "MSPRS/Taps.hpp"
 
 namespace msprs
@@ -28,6 +29,7 @@ namespace msprs
 struct ExitConfig
 {
     Bcjr   algo     = Bcjr::map;
+    const Student* siso = nullptr;   // learned equaliser in place of the BCJR
     int    bits     = 4998;
     int    n_ia     = 100;
     int    n_trials = 50;
@@ -60,10 +62,13 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
         mdm.back()->set_bcjr(cfg.algo);
     }
 
+    std::unique_ptr<Window> win;
+    if (cfg.siso) win.reset(new Window(K, taps));
+
     std::vector<ExitPoint> out;
     for (double ebn0 = cfg.ebn0_min; ebn0 < cfg.ebn0_max; ebn0 += cfg.ebn0_step)
     {
-        const float sigma = (float)std::sqrt(1.0 / (2.0 * std::pow(10.0, ebn0 / 10.0)));
+        const float sigma = (float)noise_sigma(ebn0, 0.5);
         const std::vector<float> CP = { sigma };
 
         std::mt19937_64 gen(0xE117u ^ (uint64_t)std::lround(ebn0 * 1000.0));
@@ -108,7 +113,8 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
                         gen_llrs(*pb, sa, rng, la);
                         if (tr == 0) iam = mi_avg(la, *pb);
                         for (int i = 0; i < K; i++) laf[(size_t)i] = (float)(-la[(size_t)i]);
-                        mdm[(size_t)t]->tdemodulate(CP, *pr, laf, extf);
+                        if (cfg.siso) cfg.siso->tdemodulate(*win, sigma, *pr, laf, extf);
+                        else          mdm[(size_t)t]->tdemodulate(CP, *pr, laf, extf);
                         for (int i = 0; i < K; i++) ext[(size_t)i] = -(double)extf[(size_t)i];
                         a += mi_avg(ext, *pb);
                         h += mi_hist(ext, *pb);

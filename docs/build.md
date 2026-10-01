@@ -46,6 +46,20 @@ default; records of the other two carry a `_logmap` or `_maxlog` suffix.
 `timing` runs all three on one thread and prints the time of each pass and of a
 whole frame, with the speed-up over MAP.
 
+## Learned equaliser
+
+The trained network can stand in for the BCJR in `uncoded-msprs`,
+`coded-msprs` and `exit`. Pass `--siso` with its weights; records then carry a
+`_siso` suffix. Training needs PyTorch:
+
+```
+msprs --mode dataset --L0 3 --family balanced --frames 1000 \
+  --ebn0-min 2 --ebn0-max 7 --out data/siso_L3_balanced
+python -m siso_nn.train --data data/siso_L3_balanced --out siso_nn/weights_L3_balanced.txt
+
+msprs --mode coded-msprs --L0 3 --family balanced --siso siso_nn/weights_L3_balanced.txt
+```
+
 `modtest`, `demodtest`, `tdemodtest`, `enctest` and `dectest` read stdin and
 print their output, so each block can be diffed against another implementation
 on identical input.
