@@ -91,6 +91,21 @@ signal departs from the Gaussian model the BCJR assumes.
   <img src="figures/siso_learned.png" width="80%">
 </p>
 
+## Over the Air
+
+`ota/` runs MS-PRS between the two Plutos: the burst around one coded block
+(`waveform.py`), burst detection with one frequency and one phase correction
+per burst (`sync.py`), the two radios (`radio.py`), and the simulator's BCJR
+equalizer on the received symbols (`baseline.py`).
+`notebooks/ota_bcjr.ipynb` puts fresh blocks on air at random attenuations and
+measures the BCJR's coded-bit error rate against the Es/N0 on the preamble,
+next to the simulator's curve on the Gaussian channel.
+
+It needs `pip install pyadi-iio`, the built simulator, and `bench.local.json`
+at the repo root with the serials of the two radios,
+`{"tx": "<serial>", "rx": "<serial>"}`, which git ignores. The notebook
+transmits at 448 MHz for as long as it runs.
+
 ## Run It
 
 Build the simulator, then run any mode:
@@ -108,8 +123,8 @@ conventions and the record format in [docs/reference.md](docs/reference.md).
 The tap tables in [filters/](filters) are the single source of truth for both
 filter families and every `L0`.
 
-The notebooks read what the simulator writes and draw the figures above. They
-compute nothing themselves:
+Apart from the over-the-air one, the notebooks read what the simulator writes
+and draw the figures above. They compute nothing themselves:
 
 ```
 python -m venv .venv && . .venv/bin/activate
