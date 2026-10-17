@@ -15,6 +15,7 @@
 
 #include <aff3ct.hpp>
 
+#include "MSPRS/Fixed.hpp"
 #include "MSPRS/Interleaver.hpp"
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
@@ -30,6 +31,7 @@ struct SweepConfig
     Bcjr   algo     = Bcjr::map;   // both the equaliser and the outer decoder
     const Student* siso = nullptr;   // learned equaliser in place of the BCJR
     LlrQuant quant;                  // messages between equaliser and decoder
+    const FixedFormat* fixed = nullptr;   // the integer receiver in place of both BCJRs
     bool   coded    = true;
     int    K        = 4998;   // information bits per frame
     int    iters    = 7;      // turbo iterations; the loop runs iters+1 passes
@@ -68,6 +70,8 @@ struct Chain
     std::vector<int>                        ref, dec, cw, cw_i;
     std::vector<uint32_t>                   n_gen;
     std::vector<float>                      sym, rx, Le_i, La_i, Le_n, De_n;
+    std::unique_ptr<FixedTurbo>             fixed;
+    std::vector<int>                        y_q;
 
     Chain(const SweepConfig& c, const NSC_Trellis& tr, const Taps& taps, int N_in,
           int N_mod, const aff3ct::tools::Interleaver_core<>& core, int stream)
@@ -76,6 +80,11 @@ struct Chain
       , ref(c.K), dec(c.K), cw(N_in), cw_i(N_in), n_gen(1)
       , sym(N_mod), rx(N_mod), Le_i(N_in), La_i(N_in), Le_n(N_in), De_n(N_in)
     {
+        if (c.fixed)
+        {
+            fixed.reset(new FixedTurbo(c.K, tr, taps, *c.fixed, core.get_lut()));
+            y_q.resize(N_mod);
+        }
         channel.set_seed(c.seed + 7919 * stream);
         source .set_seed(c.seed + 6271 * stream);
     }
@@ -133,20 +142,37 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
                 c.modem  .modulate  (c.cw_i, c.sym);
                 c.channel.add_noise (CP, c.sym, c.rx);
 
-                std::fill(c.La_i.begin(), c.La_i.end(), 0.f);
-                for (int it = 0; it <= cfg.iters; it++)
+                if (cfg.fixed)
                 {
-                    if (cfg.siso) cfg.siso->tdemodulate(*win, CP[0], c.rx, c.La_i, c.Le_i);
-                    else          c.modem.tdemodulate(CP, c.rx, c.La_i, c.Le_i);
-                    cfg.quant.apply(c.Le_i);
-                    c.itl_l  .deinterleave(c.Le_i, c.Le_n);
-                    c.decoder.decode_both (c.Le_n.data(), c.De_n.data(), c.dec.data());
-                    cfg.quant.apply(c.De_n);
-                    c.itl_l  .interleave  (c.De_n, c.La_i);
+                    // The front end's gain normalisation is taken as ideal here.
+                    for (int i = 0; i < N_mod; i++) c.y_q[i] = c.fixed->equaliser().quantise(c.rx[i]);
+                    c.fixed->start();
+                    for (int it = 0; it <= cfg.iters; it++)
+                    {
+                        c.fixed->pass(c.y_q.data(), c.dec.data());
 
-                    long long e = 0;
-                    for (int i = 0; i < cfg.K; i++) e += (c.dec[i] != c.ref[i]);
-                    st.per_iter[it] += e;
+                        long long e = 0;
+                        for (int i = 0; i < cfg.K; i++) e += (c.dec[i] != c.ref[i]);
+                        st.per_iter[it] += e;
+                    }
+                }
+                else
+                {
+                    std::fill(c.La_i.begin(), c.La_i.end(), 0.f);
+                    for (int it = 0; it <= cfg.iters; it++)
+                    {
+                        if (cfg.siso) cfg.siso->tdemodulate(*win, CP[0], c.rx, c.La_i, c.Le_i);
+                        else          c.modem.tdemodulate(CP, c.rx, c.La_i, c.Le_i);
+                        cfg.quant.apply(c.Le_i);
+                        c.itl_l  .deinterleave(c.Le_i, c.Le_n);
+                        c.decoder.decode_both (c.Le_n.data(), c.De_n.data(), c.dec.data());
+                        cfg.quant.apply(c.De_n);
+                        c.itl_l  .interleave  (c.De_n, c.La_i);
+
+                        long long e = 0;
+                        for (int i = 0; i < cfg.K; i++) e += (c.dec[i] != c.ref[i]);
+                        st.per_iter[it] += e;
+                    }
                 }
             }
 

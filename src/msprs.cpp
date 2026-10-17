@@ -1,4 +1,5 @@
 // MS-PRS simulation driver.
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -8,8 +9,10 @@
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Bounds.hpp"
 #include "MSPRS/Dataset.hpp"
+#include "MSPRS/Decode.hpp"
 #include "MSPRS/Student.hpp"
 #include "MSPRS/ExitSweep.hpp"
+#include "MSPRS/Fixed.hpp"
 #include "MSPRS/Eye.hpp"
 #include "MSPRS/LdpcSweep.hpp"
 #include "MSPRS/Params.hpp"
@@ -51,6 +54,8 @@ struct args
     std::string siso;
     int         llr_bits = 0;
     double      llr_step = 1.0;
+    bool        fixed = false;
+    std::string fx;
 };
 
 args parse(int argc, char** argv)
@@ -93,10 +98,21 @@ args parse(int argc, char** argv)
         else if (s == "--siso"      && i + 1 < argc) a.siso     = next();
         else if (s == "--llr-bits"  && i + 1 < argc) a.llr_bits = std::stoi(next());
         else if (s == "--llr-step"  && i + 1 < argc) a.llr_step = std::stod(next());
+        else if (s == "--fixed")                     a.fixed    = true;
+        else if (s == "--fx"        && i + 1 < argc) { a.fx = next(); a.fixed = true; }
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
 }
+// "eq_bits=3,eq_shift=4" -> "_eq_bits3_eq_shift4", for record names.
+std::string fx_suffix(std::string spec)
+{
+    std::string out;
+    for (char c : spec) out += (c == ',') ? '_' : c;
+    out.erase(std::remove(out.begin(), out.end(), '='), out.end());
+    return out.empty() ? "" : "_" + out;
+}
+
 // Records of the default MAP keep their plain names.
 std::string bcjr_suffix(const msprs::Bcjr b)
 {
@@ -118,6 +134,17 @@ int main(int argc, char** argv)
     {
         std::cerr << "--llr-bits applies to coded-msprs, exit and exit-decoder\n";
         return 2;
+    }
+    msprs::FixedFormat fmt;
+    if (a.fixed)
+    {
+        fmt = msprs::load_fixed_format(a.params);
+        if (!a.fx.empty()) fmt.set(a.fx);
+        if (quant.on() || !a.siso.empty())
+        {
+            std::cerr << "--fixed replaces both BCJRs and quantises its own messages\n";
+            return 2;
+        }
     }
 
     if (a.mode == "params")
@@ -242,6 +269,11 @@ int main(int argc, char** argv)
         cfg.ebn0_step = a.step;
         cfg.algo      = algo;
         cfg.quant     = quant;
+        if (a.fixed)
+        {
+            if (!cfg.coded) { std::cerr << "--fixed applies to coded-msprs\n"; return 2; }
+            cfg.fixed = &fmt;
+        }
 
         std::unique_ptr<msprs::Student> net;
         if (!a.siso.empty()) net.reset(new msprs::Student(a.siso));
@@ -269,13 +301,15 @@ int main(int argc, char** argv)
                 meta["source_bits"] = cfg.K;
                 meta["metric_convention"] = "llr-2sigma2";
                 if (cfg.coded) { meta["iters"] = cfg.iters; meta["code"] = "conv_K3_57"; }
-                if (algo != msprs::Bcjr::map) meta["bcjr"] = msprs::to_string(algo);
+                if (algo != msprs::Bcjr::map && !a.fixed) meta["bcjr"] = msprs::to_string(algo);
+                if (a.fixed) meta["fixed"] = fmt.json();
                 if (net) meta["siso"] = a.siso.substr(a.siso.find_last_of('/') + 1);
                 if (quant.on()) { meta["llr_bits"] = quant.bits; meta["llr_step"] = quant.step; }
                 const std::string scheme = a.scheme.empty()
                     ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family +
                        (cfg.coded ? "_conv_K3_" + std::to_string(cfg.iters) + "iters" : "_uncoded") +
-                       bcjr_suffix(algo) + (net ? "_siso" : "") + quant.suffix())
+                       (a.fixed ? "_fixed" + fx_suffix(a.fx) : bcjr_suffix(algo)) +
+                       (net ? "_siso" : "") + quant.suffix())
                     : a.scheme;
                 msprs::write_point(a.out, scheme, pt, meta, "aff3ct-4.1.2", a.stamp);
             }
@@ -415,6 +449,33 @@ int main(int argc, char** argv)
                       << std::setw(13) << pr.source_bits / (ms * 1e3)
                       << std::setprecision(2) << std::setw(7) << ref_ms / ms << "x\n";
         }
+        return 0;
+    }
+
+    // Bursts received elsewhere, binary on stdin and stdout (see Decode.hpp).
+    if (a.mode == "decode")
+    {
+        const auto pr = msprs::load_params(a.params);
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
+        msprs::DecodeConfig cfg;
+        cfg.K = pr.source_bits; cfg.passes = a.iters + 1; cfg.threads = a.threads; cfg.algo = algo;
+        if (a.fixed) cfg.fixed = &fmt;
+        const size_t n = msprs::decode_stdin(cfg, taps, tr);
+        std::cerr << "# decoded " << n << " bursts\n";
+        return 0;
+    }
+
+    // The integer receiver's vectors for the HDL: y words on stdin, one per line.
+    if (a.mode == "vectors")
+    {
+        if (!a.fixed || a.out.empty()) { std::cerr << "vectors needs --fixed and --out\n"; return 2; }
+        const auto pr = msprs::load_params(a.params);
+        const auto taps = msprs::load_taps(a.taps, a.L0, a.family);
+        const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
+        std::vector<int> y;
+        for (int v; std::cin >> v;) y.push_back(v);
+        msprs::write_vectors(a.out, y, pr.source_bits, a.iters + 1, taps, tr, fmt);
         return 0;
     }
 

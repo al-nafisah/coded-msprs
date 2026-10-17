@@ -78,5 +78,21 @@
   "ftn": {
     "tau": 0.5,
     "rolloff": 0.3
+  },
+  "fixed_point": {
+    "turbo": {
+      "y_bits": 8,
+      "y_amp": 26.1,
+      "bm_shift": 5,
+      "bm_bits": 7,
+      "sm_bits": 7,
+      "eq_bits": 4,
+      "eq_shift": 3,
+      "dec_bits": 4,
+      "dec_shift": 3,
+      "dsm_bits": 5,
+      "eq_scale": 4,
+      "dec_scale": 4
+    }
   }
 }
