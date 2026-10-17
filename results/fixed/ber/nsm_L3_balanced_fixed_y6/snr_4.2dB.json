@@ -1,0 +1,44 @@
+{
+  "ber": 0.14593970921702015,
+  "ber_lo95": 0.1453749664034374,
+  "ber_ub95": 0.14650581999165896,
+  "bits_cnt": 1499400,
+  "config": {
+    "L0": 3,
+    "code": "conv_K3_57",
+    "filter": "balanced",
+    "fixed": {
+      "bm_bits": 16,
+      "bm_shift": 1,
+      "dec_bits": 4,
+      "dec_scale": 4,
+      "dec_shift": 3,
+      "dsm_bits": 20,
+      "eq_bits": 4,
+      "eq_scale": 4,
+      "eq_shift": 3,
+      "sm_bits": 20,
+      "y_amp": 7.11,
+      "y_bits": 6
+    },
+    "iters": 7,
+    "metric_convention": "llr-2sigma2",
+    "source_bits": 4998
+  },
+  "duration_s": 0.391299121,
+  "eb_no_db": 4.2,
+  "ers_cnt": 218822,
+  "ers_per_iter": [
+    399125,
+    328804,
+    300140,
+    282231,
+    268687,
+    250961,
+    233524,
+    218822
+  ],
+  "implementation": "aff3ct-4.1.2",
+  "is_upper_bound": false,
+  "n_frames": 300
+}

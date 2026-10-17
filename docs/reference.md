@@ -55,4 +55,6 @@ mode still draws its own 8,000-bit interleaver from that seed.
 ## Reproducibility
 
 EXIT results depend on `--threads`: a-priori draws are seeded per thread and
-the IA grid is dealt round-robin. BER sweeps do not.
+the IA grid is dealt round-robin. BER sweeps do too, since each thread draws
+its own frames from its own seed, so paired runs need the same `--threads`
+as well as the same `--seed`.

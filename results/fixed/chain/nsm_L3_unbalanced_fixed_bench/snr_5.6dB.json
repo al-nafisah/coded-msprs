@@ -1,0 +1,55 @@
+{
+  "eb_no_db": 5.6,
+  "ber": 5.718954248366013e-05,
+  "ers_cnt": 1029,
+  "bits_cnt": 17992800,
+  "n_frames": 3600,
+  "frame_errors": 616,
+  "missed": 0,
+  "config": {
+    "L0": 3,
+    "filter": "unbalanced",
+    "receiver": "fixed",
+    "scenario": "bench",
+    "cfo": [
+      20.0,
+      150.0
+    ],
+    "linewidth": 1.0,
+    "fixed_point": {
+      "turbo": {
+        "y_bits": 8,
+        "y_amp": 26.1,
+        "bm_shift": 5,
+        "bm_bits": 7,
+        "sm_bits": 7,
+        "eq_bits": 4,
+        "eq_shift": 3,
+        "dec_bits": 4,
+        "dec_shift": 3,
+        "dsm_bits": 5,
+        "eq_scale": 4,
+        "dec_scale": 4
+      },
+      "front_end": {
+        "sym_frac": 8,
+        "tap_bits": 12,
+        "dac_amp": 1024,
+        "mf_frac": 1,
+        "mf_bits": 14,
+        "buf_rms": 6,
+        "buf_bits": 10,
+        "cordic": 14,
+        "gain_shift": 13,
+        "gain_bits": 15,
+        "loop_p": 11,
+        "loop_i": 3,
+        "frac_bits": 4,
+        "guard": 4,
+        "refine_shift": 12,
+        "refine_bits": 14
+      }
+    },
+    "iters": 7
+  }
+}

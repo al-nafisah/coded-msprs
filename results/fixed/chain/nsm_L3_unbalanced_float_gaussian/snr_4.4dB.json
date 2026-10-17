@@ -1,0 +1,22 @@
+{
+  "eb_no_db": 4.4,
+  "ber": 0.0006572629051620648,
+  "ers_cnt": 1314,
+  "bits_cnt": 1999200,
+  "n_frames": 400,
+  "frame_errors": 320,
+  "missed": 0,
+  "config": {
+    "L0": 3,
+    "filter": "unbalanced",
+    "receiver": "float",
+    "scenario": "gaussian",
+    "cfo": [
+      0.0,
+      0.0
+    ],
+    "linewidth": 0.0,
+    "fixed_point": null,
+    "iters": 7
+  }
+}

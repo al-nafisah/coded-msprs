@@ -126,12 +126,69 @@ and at most 0.04 dB above that, with EXIT again within 0.07 dB.
 `notebooks/llr_quant.ipynb` draws the figure from `results/quant`; the
 commands are in [docs/build.md](docs/build.md).
 
+## Fixed Point
+
+The FPGAs of the two Plutos are to run the whole chain, so it is also written
+in integer arithmetic, bit for bit what the hardware computes: from the
+information bits to the 12-bit DAC words, and from the 12-bit ADC words to the
+decisions. `ota/fixed.py` holds the transmitter and the receiver's front end,
+`--fixed` the turbo receiver, and [docs/fixed_point.md](docs/fixed_point.md)
+every word with its rounding and saturation; the HDL is written to match.
+
+| Block | Words |
+|---|---|
+| Transmitter | 10-bit symbol table, 12-bit root-raised-cosine taps, 12-bit DAC words that cannot saturate |
+| Front end | 14-bit matched filter, timing to 1/16 sample, 10-bit symbol buffer, 14-step CORDIC, 24-bit phase accumulator, phase loop |
+| Turbo receiver | 8-bit received symbols, 7-bit branch and state metrics, 4-bit messages, 5-bit decoder state metrics |
+
+Both BCJRs run max-log-MAP on integer costs with no noise estimate.
+Max-log does not change under a common scale of its metrics, so one scale,
+set by the amplitude the front end normalizes to, serves every SNR; against
+the same receiver told the noise it costs at most 0.03 dB. Loss at BER 1e-4
+against floating-point MAP with ideal synchronization (4.92 / 5.18 dB),
+balanced / unbalanced:
+
+| Receiver | Loss at 1e-4 |
+|---|---|
+| Integer turbo receiver, ideal synchronization | 0.09 / 0.08 dB |
+| Whole integer chain, Gaussian channel | 0.14 / 0.13 dB |
+| Whole integer chain, 20 to 150 Hz offset and 1 Hz phase walk | 0.16 / 0.14 dB |
+| `ota/sync.py` and the MAP turbo receiver, Gaussian channel | 0.14 / 0.12 dB |
+| `ota/sync.py` and the MAP turbo receiver, offset and phase walk | does not reach 1e-4 |
+
+The whole integer chain does as well as the floating-point receiver the
+over-the-air notebook uses, and where the phase walks it does better:
+`sync.py` has no phase loop, and its BER is still above 3e-4 at 6 dB. The
+4-bit messages cost most of the integer receiver's own loss, as they do in
+floating point. Higher up the waterfall the loss grows: at 1e-3 the integer
+receiver is 0.78 / 0.14 dB from MAP, most of the balanced figure being
+max-log's own late start.
+
+The front end needed two things the floating-point `sync.py` does without.
+Its timing is interpolated to 1/16 of a sample, since the nearest of 8
+samples per symbol leaves intersymbol interference as high as −21 dB. And it
+measures the gain twice, from the preamble and again from the whole burst:
+the preamble alone leaves an error of 3.6% rms at 5 dB, and the integer turbo
+receiver fails on the bursts whose gain comes out more than 6% low, where
+floating point does not. A second-order loop follows the phase walk of the
+two crystals.
+
+<p align="center">
+  <img src="figures/fixed_point.png" width="94%">
+</p>
+
+`notebooks/fixed_point.ipynb` draws the figure from `results/fixed`; the
+commands are in [docs/build.md](docs/build.md). `python -m ota.fixed <dir>`
+writes the HDL's test vectors.
+
 ## Over the Air
 
 `ota/` runs MS-PRS between the two Plutos: the burst around one coded block
 (`waveform.py`), burst detection with one frequency and one phase correction
 per burst (`sync.py`), the two radios (`radio.py`), and the simulator's BCJR
-equalizer on the received symbols (`baseline.py`).
+equalizer on the received symbols (`baseline.py`). The integer transmitter and
+front end are in `fixed.py`; `channel.py` simulates the bench and `chain.py`
+runs the whole link on it.
 `notebooks/ota_bcjr.ipynb` puts fresh blocks on air at random attenuations and
 measures the BCJR's coded-bit error rate against the Es/N0 on the preamble,
 next to the simulator's curve on the Gaussian channel.

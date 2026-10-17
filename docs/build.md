@@ -85,6 +85,47 @@ msprs --mode exit-decoder --n-ia 100 --n-trials 1000 --llr-bits 4 --llr-step 1 -
 
 Leave out the two `--llr` flags for the reference.
 
+## Fixed point
+
+`--fixed` runs the integer turbo receiver of `include/MSPRS/Fixed.hpp` in
+place of both BCJRs in `coded-msprs`, with the formats of the `fixed_point`
+section of `config.json`. `--fx key=value,...` changes fields of that format
+and implies `--fixed`; records carry `_fixed` and the changed fields. The
+study in `notebooks/fixed_point.ipynb` keeps its records under
+`results/fixed`, seeded per point as above, so it shares its floating-point
+references with `results/quant`:
+
+```
+for x in $(seq 3.0 0.2 7.0); do
+  msprs --mode coded-msprs --L0 3 --family balanced --threads 12 --be 1000 --max-fra 20000 \
+    --ebn0-min $x --ebn0-max 99 --ebn0-step 99 --seed $(echo $x | tr -d .) \
+    --fixed --out results/fixed/ber
+done
+```
+
+A word-length variant adds the fields it changes and a name, for example
+`--fx sm_bits=6 --scheme nsm_L3_balanced_fixed_sm6`; each record's
+`config.fixed` holds the whole format it ran.
+
+The integer transmitter and front end are in `ota/fixed.py`, the simulated
+bench in `ota/channel.py`. The whole chain, both receivers on the same
+captures, and the front end alone:
+
+```
+python -m ota.chain --family balanced --scenario gaussian --esn0 $(seq 4.0 0.2 5.8)
+python -m ota.chain --family balanced --scenario bench --esn0 $(seq 4.0 0.2 5.8)
+python -m ota.chain --front-end
+```
+
+`python -m ota.fixed <dir>` writes the HDL test vectors of one burst (see
+[fixed_point.md](fixed_point.md)).
+
+`decode` reads bursts on stdin and writes the decisions on stdout, so another
+program can use the turbo receiver: per burst the L received symbols as int16
+words with `--fixed`, or as float32 followed by the float32 noise sigma
+without; out come the K decisions, one byte each. `vectors --fixed --out <dir>`
+writes the turbo receiver's vectors for the y words on stdin, one per line.
+
 `modtest`, `demodtest`, `tdemodtest`, `enctest` and `dectest` read stdin and
 print their output, so each block can be diffed against another implementation
 on identical input.
