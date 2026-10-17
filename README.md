@@ -80,6 +80,52 @@ between them is the tunnel the turbo loop climbs.
   <img src="figures/exit_turbo_gain.png" width="92%">
 </p>
 
+## Quantized Messages
+
+In hardware, the LLRs the equalizer and the decoder pass each other are
+stored in the interleaver memories, one word per coded bit in each direction.
+`--llr-bits b --llr-step d` rounds both directions to the `2^b - 1` levels
+from `-(2^(b-1)-1) d` to `(2^(b-1)-1) d`. Zero is a level, and a power-of-two
+step is a fixed-point format; the channel samples and the arithmetic inside
+each BCJR stay in floating point. Each width ran at three power-of-two steps,
+and the table keeps the best. Loss at BER 1e-4 against floating point on the
+same frames (4.92 / 5.18 dB), for `L0 = 3` with MAP, balanced / unbalanced:
+
+| Bits | Step | Clips at | Loss, simulated | Loss, EXIT | Memory, 2 × 10,000 words |
+|---|---|---|---|---|---|
+| 6 | 0.5 | ±15.5 | 0.02 / 0.00 dB | 0.01 / 0.01 dB | 120 kbit |
+| 5 | 0.5 | ±7.5 | 0.04 / 0.04 dB | 0.03 / 0.03 dB | 100 kbit |
+| 4 | 1 | ±7 | 0.10 / 0.09 dB | 0.08 / 0.08 dB | 80 kbit |
+| 3 | 2 | ±6 | 0.26 / 0.31 dB | 0.27 / 0.28 dB | 60 kbit |
+| 2 | 4 | ±4 | 1.30 / 1.40 dB | 1.31 / 1.41 dB | 40 kbit |
+
+Four bits cost a tenth of a decibel; below that the loss climbs fast. The step
+matters as much as the width. Four bits at step 0.5 clip at ±3.5 and lose
+0.7 dB, more than three bits at step 2.
+
+<p align="center">
+  <img src="figures/llr_quant.png" width="92%">
+</p>
+
+The EXIT chart predicts these losses without a BER simulation. It picks the
+same step as the simulation at every width, and its loss for that step is
+within 0.04 dB of the simulated one. Across all 30 curves it stays within
+0.2 dB (top right); its larger misses are all on steps that are wrong for
+their width. Quantized messages are not consistent LLRs, so their mutual
+information is counted from a histogram with one bin per level. The equalizer
+is not recursive, so its curve ends below 1 and the loop settles at a fixed
+point instead of opening at a sharp threshold; the prediction therefore runs
+the receiver's 8 passes on the two curves and reads the BER off the decoder's
+measured BER where the trajectory ends. The loss sits in the equalizer's
+curve, which drops, while the decoder's barely moves (bottom left).
+
+With max-log-MAP in both BCJRs, the usual choice in hardware, the same steps
+lose the same: 1.36 / 1.44 dB at 2 bits, 0.25 / 0.31 dB at 3, 0.09 dB at 4
+and at most 0.04 dB above that, with EXIT again within 0.07 dB.
+
+`notebooks/llr_quant.ipynb` draws the figure from `results/quant`; the
+commands are in [docs/build.md](docs/build.md).
+
 ## Over the Air
 
 `ota/` runs MS-PRS between the two Plutos: the burst around one coded block

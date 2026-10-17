@@ -1,0 +1,33 @@
+{
+  "ber": 1.5113959252765854e-05,
+  "ber_lo95": 1.4055653852567965e-05,
+  "ber_ub95": 1.6230834661864904e-05,
+  "bits_cnt": 50019984,
+  "config": {
+    "L0": 3,
+    "code": "conv_K3_57",
+    "filter": "balanced",
+    "iters": 7,
+    "llr_bits": 4,
+    "llr_step": 0.5,
+    "metric_convention": "llr-2sigma2",
+    "source_bits": 4998
+  },
+  "duration_s": 20.435750349,
+  "eb_no_db": 6.6,
+  "ers_cnt": 756,
+  "ers_per_iter": [
+    3319250,
+    58016,
+    1067,
+    770,
+    768,
+    760,
+    760,
+    756
+  ],
+  "implementation": "aff3ct-4.1.2",
+  "is_upper_bound": false,
+  "n_frames": 10008,
+  "timestamp": "2026-10-16T22:48:29Z"
+}

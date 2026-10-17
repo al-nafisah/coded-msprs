@@ -34,6 +34,16 @@ still looking plausible.
 `--mode bounds` returns `d2_min` on the internal `Es = 1` normalisation and on
 the `Es = 5` scale, where 4-ASK has `d2 = 4`.
 
+## Quantised messages
+
+Quantised messages are no longer consistent LLRs, so the averaging and
+magnitude estimators do not apply to them. Their EXIT records carry `IA_q` and
+`IE_q` instead, the mutual information of what goes in and what comes out,
+from a histogram with one bin per level, pooled over the trials. `IA` stays
+the nominal grid of the Gaussian a priori before it is quantised.
+`exit-decoder` also writes `BER`, the error rate of the information bits the
+decoder decides at each a priori.
+
 ## Reproducibility
 
 EXIT results depend on `--threads`: a-priori draws are seeded per thread and

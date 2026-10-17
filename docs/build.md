@@ -60,6 +60,31 @@ python -m siso_nn.train --data data/siso_L3_balanced --out siso_nn/weights_L3_ba
 msprs --mode coded-msprs --L0 3 --family balanced --siso siso_nn/weights_L3_balanced.txt
 ```
 
+## Quantised messages
+
+`--llr-bits b --llr-step d` rounds the LLRs the turbo loop passes between the
+equaliser and the decoder, both directions, to the codes
+`-(2^(b-1)-1) .. 2^(b-1)-1` times `d`, in `coded-msprs`, `exit` and
+`exit-decoder`. Records carry a `_q<b>_step<d>` suffix. The study in
+`notebooks/llr_quant.ipynb` keeps its records under `results/quant`, its own
+floating-point reference included. Each BER point runs as its own process,
+seeded by its Eb/N0, so every quantiser sees the noise its reference saw:
+
+```
+for x in $(seq 2.6 0.2 5.8); do
+  msprs --mode coded-msprs --L0 3 --family balanced --threads 12 --be 1000 --max-fra 10000 \
+    --ebn0-min $x --ebn0-max 99 --ebn0-step 99 --seed $(echo $x | tr -d .) \
+    --llr-bits 4 --llr-step 1 --out results/quant/ber
+done
+
+msprs --mode exit --L0 3 --family balanced --exit-bits 10000 --n-ia 40 --n-trials 32 \
+  --exit-fresh-rx --threads 12 --ebn0-min 2 --ebn0-max 8.01 --ebn0-step 0.25 \
+  --llr-bits 4 --llr-step 1 --out results/quant/exit
+msprs --mode exit-decoder --n-ia 100 --n-trials 1000 --llr-bits 4 --llr-step 1 --out results/quant/exit
+```
+
+Leave out the two `--llr` flags for the reference.
+
 `modtest`, `demodtest`, `tdemodtest`, `enctest` and `dectest` read stdin and
 print their output, so each block can be diffed against another implementation
 on identical input.
