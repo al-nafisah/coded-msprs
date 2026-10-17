@@ -13,6 +13,7 @@
 #include "MSPRS/Eye.hpp"
 #include "MSPRS/LdpcSweep.hpp"
 #include "MSPRS/Params.hpp"
+#include "MSPRS/Quant.hpp"
 #include "MSPRS/Record.hpp"
 #include "MSPRS/Sweep.hpp"
 #include "MSPRS/Taps.hpp"
@@ -48,6 +49,8 @@ struct args
     double      ebn0 = 15.11;
     int         frames = 200;
     std::string siso;
+    int         llr_bits = 0;
+    double      llr_step = 1.0;
 };
 
 args parse(int argc, char** argv)
@@ -88,6 +91,8 @@ args parse(int argc, char** argv)
         else if (s == "--ebn0"      && i + 1 < argc) a.ebn0     = std::stod(next());
         else if (s == "--frames"    && i + 1 < argc) a.frames   = std::stoi(next());
         else if (s == "--siso"      && i + 1 < argc) a.siso     = next();
+        else if (s == "--llr-bits"  && i + 1 < argc) a.llr_bits = std::stoi(next());
+        else if (s == "--llr-step"  && i + 1 < argc) a.llr_step = std::stod(next());
         else { std::cerr << "unknown argument: " << s << "\n"; std::exit(2); }
     }
     return a;
@@ -108,6 +113,12 @@ int main(int argc, char** argv)
 {
     const args a = parse(argc, argv);
     const msprs::Bcjr algo = msprs::bcjr_from(a.bcjr);
+    const msprs::LlrQuant quant(a.llr_bits, a.llr_step);
+    if (quant.on() && a.mode != "coded-msprs" && a.mode != "exit" && a.mode != "exit-decoder")
+    {
+        std::cerr << "--llr-bits applies to coded-msprs, exit and exit-decoder\n";
+        return 2;
+    }
 
     if (a.mode == "params")
     {
@@ -231,6 +242,7 @@ int main(int argc, char** argv)
         cfg.ebn0_max  = a.hi;
         cfg.ebn0_step = a.step;
         cfg.algo      = algo;
+        cfg.quant     = quant;
 
         std::unique_ptr<msprs::Student> net;
         if (!a.siso.empty()) net.reset(new msprs::Student(a.siso));
@@ -260,10 +272,11 @@ int main(int argc, char** argv)
                 if (cfg.coded) { meta["iters"] = cfg.iters; meta["code"] = "conv_K3_57"; }
                 if (algo != msprs::Bcjr::map) meta["bcjr"] = msprs::to_string(algo);
                 if (net) meta["siso"] = a.siso.substr(a.siso.find_last_of('/') + 1);
+                if (quant.on()) { meta["llr_bits"] = quant.bits; meta["llr_step"] = quant.step; }
                 const std::string scheme = a.scheme.empty()
                     ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family +
                        (cfg.coded ? "_conv_K3_" + std::to_string(cfg.iters) + "iters" : "_uncoded") +
-                       bcjr_suffix(algo) + (net ? "_siso" : ""))
+                       bcjr_suffix(algo) + (net ? "_siso" : "") + quant.suffix())
                     : a.scheme;
                 msprs::write_point(a.out, scheme, pt, meta, "aff3ct-4.1.2", a.stamp);
             }
@@ -280,6 +293,7 @@ int main(int argc, char** argv)
         cfg.threads = a.threads; cfg.fresh_rx = a.fresh_rx;
         cfg.ebn0_min = a.lo; cfg.ebn0_max = a.hi; cfg.ebn0_step = a.step;
         cfg.algo = algo;
+        cfg.quant = quant;
 
         std::unique_ptr<msprs::Student> net;
         if (!a.siso.empty()) net.reset(new msprs::Student(a.siso));
@@ -291,7 +305,8 @@ int main(int argc, char** argv)
         const auto pts = msprs::exit_sweep(cfg, taps);
         for (const auto& e : pts)
             std::cout << "E " << e.eb_no_db << " " << e.ia << " " << e.ie_avg << " "
-                      << e.ie_hist << " " << e.ie_mag << " " << e.ia_measured << "\n";
+                      << e.ie_hist << " " << e.ie_mag << " " << e.ia_measured << " "
+                      << e.ia_q << " " << e.ie_q << "\n";
 
         if (!a.out.empty())
         {
@@ -299,19 +314,20 @@ int main(int argc, char** argv)
             std::vector<double> ia;
             for (int k = 0; k < cfg.n_ia; k++) ia.push_back(pts[(size_t)k].ia);
             j["IA"] = ia;
+            // Quantised messages are not LLRs, so they keep only the
+            // level-histogram MI of what goes in and what comes out.
             std::vector<double> snrs;
             for (const auto& e : pts)
             {
                 std::ostringstream key; key << e.eb_no_db;
-                if (!j["results"].contains(key.str()))
-                {
-                    snrs.push_back(e.eb_no_db);
-                    j["results"][key.str()] = { {"IE_avg", nlohmann::json::array()},
-                                                {"IE_hist", nlohmann::json::array()},
-                                                {"IE_mag", nlohmann::json::array()},
-                                                {"IA_measured", nlohmann::json::array()} };
-                }
+                if (!j["results"].contains(key.str())) snrs.push_back(e.eb_no_db);
                 auto& r = j["results"][key.str()];
+                if (quant.on())
+                {
+                    r["IA_q"].push_back(e.ia_q);
+                    r["IE_q"].push_back(e.ie_q);
+                    continue;
+                }
                 r["IE_avg"].push_back(e.ie_avg);
                 r["IE_hist"].push_back(e.ie_hist);
                 r["IE_mag"].push_back(e.ie_mag);
@@ -324,8 +340,10 @@ int main(int argc, char** argv)
             if (!a.stamp.empty()) j["meta"]["timestamp"] = a.stamp;
             if (algo != msprs::Bcjr::map) j["meta"]["bcjr"] = msprs::to_string(algo);
             if (net) j["meta"]["siso"] = a.siso.substr(a.siso.find_last_of('/') + 1);
+            if (quant.on()) { j["meta"]["llr_bits"] = quant.bits; j["meta"]["llr_step"] = quant.step; }
             const std::string scheme = a.scheme.empty()
-                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family + bcjr_suffix(algo) + (net ? "_siso" : ""))
+                ? ("nsm_L" + std::to_string(a.L0) + "_" + a.family + bcjr_suffix(algo) +
+                   (net ? "_siso" : "") + quant.suffix())
                 : a.scheme;
             msprs::mkdir_p(a.out);
             std::ofstream of(a.out + "/" + scheme + ".json");
@@ -431,26 +449,34 @@ int main(int argc, char** argv)
     {
         const auto pr = msprs::load_params(a.params);
         const msprs::NSC_Trellis tr(pr.conv_K, { pr.conv_octal[0], pr.conv_octal[1] });
-        const auto pts = msprs::decoder_exit(tr, pr.source_bits, a.n_ia, a.n_trials, a.seed, algo);
+        const auto pts = msprs::decoder_exit(tr, pr.source_bits, a.n_ia, a.n_trials, a.seed, algo, quant);
 
         std::cout << std::setprecision(10);
         for (const auto& e : pts)
             std::cout << "D " << e.ia << " " << e.ie_avg << " " << e.ie_hist << " "
-                      << e.ia_measured << "\n";
+                      << e.ia_measured << " " << e.ia_q << " " << e.ie_q << " " << e.ber << "\n";
 
         if (!a.out.empty())
         {
             nlohmann::json j;
-            std::vector<double> ia, av, hi, iam;
+            std::vector<double> ia, av, hi, iam, iaq, ieq, ber;
             for (const auto& e : pts)
             { ia.push_back(e.ia); av.push_back(e.ie_avg); hi.push_back(e.ie_hist);
-              iam.push_back(e.ia_measured); }
-            j["IA"] = ia; j["IE_avg"] = av; j["IE_hist"] = hi; j["IA_measured"] = iam;
+              iam.push_back(e.ia_measured); iaq.push_back(e.ia_q); ieq.push_back(e.ie_q);
+              ber.push_back(e.ber); }
+            j["IA"] = ia; j["BER"] = ber;
+            if (quant.on())
+            {
+                j["IA_q"] = iaq; j["IE_q"] = ieq;
+                j["llr_bits"] = quant.bits; j["llr_step"] = quant.step;
+            }
+            else { j["IE_avg"] = av; j["IE_hist"] = hi; j["IA_measured"] = iam; }
             j["coder"] = { {"K", pr.conv_K}, {"octal_code", pr.conv_octal} };
             if (!a.stamp.empty()) j["timestamp"] = a.stamp;
             if (algo != msprs::Bcjr::map) j["bcjr"] = msprs::to_string(algo);
             msprs::mkdir_p(a.out);
-            std::ofstream of(a.out + "/coder_K" + std::to_string(pr.conv_K) + bcjr_suffix(algo) + ".json");
+            std::ofstream of(a.out + "/coder_K" + std::to_string(pr.conv_K) + bcjr_suffix(algo) +
+                             quant.suffix() + ".json");
             of << j.dump(2) << "\n";
         }
         return 0;

@@ -20,6 +20,7 @@
 #include "MSPRS/Exit.hpp"
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
+#include "MSPRS/Quant.hpp"
 #include "MSPRS/Student.hpp"
 #include "MSPRS/Taps.hpp"
 
@@ -35,13 +36,16 @@ struct ExitConfig
     int    n_trials = 50;
     int    threads  = 1;
     bool   fresh_rx = false;   // redraw the channel per trial
+    LlrQuant quant;            // quantise the a priori in and the extrinsic out
     double ia_scale = 0.999, ia_lo = 1e-3, ia_hi = 1.0;
     double ebn0_min = 0.0, ebn0_max = 10.01, ebn0_step = 0.2;
 };
 
+// ia_q and ie_q are the level-histogram MI of the quantised a priori and
+// extrinsic; zero in floating point.
 struct ExitPoint
 {
-    double eb_no_db, ia, ie_avg, ie_hist, ie_mag, ia_measured;
+    double eb_no_db, ia, ie_avg, ie_hist, ie_mag, ia_measured, ia_q, ie_q;
 };
 
 inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps)
@@ -79,7 +83,7 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
         std::normal_distribution<double> nd(0.0, 1.0);
         for (int i = 0; i < Ns; i++) rx[(size_t)i] = sym[(size_t)i] + (float)(sigma * nd(gen));
 
-        std::vector<std::array<double, 4>> res((size_t)cfg.n_ia);
+        std::vector<std::array<double, 6>> res((size_t)cfg.n_ia);
         std::vector<std::thread> pool;
         for (int t = 0; t < nth; t++)
             pool.emplace_back([&, t] {
@@ -95,6 +99,7 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
                 {
                     const double sa = i_inv(IA[(size_t)k]);
                     double a = 0, h = 0, m = 0, iam = 0;
+                    LevelHistogram qa(cfg.quant), qe(cfg.quant);
                     for (int tr = 0; tr < cfg.n_trials; tr++)
                     {
                         // One channel realisation per Eb/N0 leaves its own noise
@@ -113,33 +118,39 @@ inline std::vector<ExitPoint> exit_sweep(const ExitConfig& cfg, const Taps& taps
                         gen_llrs(*pb, sa, rng, la);
                         if (tr == 0) iam = mi_avg(la, *pb);
                         for (int i = 0; i < K; i++) laf[(size_t)i] = (float)(-la[(size_t)i]);
+                        if (cfg.quant.on()) { cfg.quant.apply(laf); qa.add(laf, *pb); }
                         if (cfg.siso) cfg.siso->tdemodulate(*win, sigma, *pr, laf, extf);
                         else          mdm[(size_t)t]->tdemodulate(CP, *pr, laf, extf);
+                        if (cfg.quant.on()) { cfg.quant.apply(extf); qe.add(extf, *pb); }
                         for (int i = 0; i < K; i++) ext[(size_t)i] = -(double)extf[(size_t)i];
                         a += mi_avg(ext, *pb);
                         h += mi_hist(ext, *pb);
                         m += mi_mag(ext);
                     }
-                    res[(size_t)k] = { a / cfg.n_trials, h / cfg.n_trials, m / cfg.n_trials, iam };
+                    res[(size_t)k] = { a / cfg.n_trials, h / cfg.n_trials, m / cfg.n_trials, iam,
+                                       qa.mi(), qe.mi() };
                 }
             });
         for (auto& th : pool) th.join();
 
         for (int k = 0; k < cfg.n_ia; k++)
             out.push_back({ ebn0, IA[(size_t)k], res[(size_t)k][0], res[(size_t)k][1],
-                            res[(size_t)k][2], res[(size_t)k][3] });
+                            res[(size_t)k][2], res[(size_t)k][3], res[(size_t)k][4], res[(size_t)k][5] });
     }
     return out;
 }
 
 // EXIT characteristic of the outer decoder. It does not depend on the channel:
 // synthetic a priori LLRs at each I_A go straight in, and the extrinsic mutual
-// information is measured on the coded bits.
-struct DecoderExitPoint { double ia, ie_avg, ie_hist, ia_measured; };
+// information is measured on the coded bits. `ber` is the error rate of the
+// information bits it decides, which turns the end of an EXIT trajectory into
+// a BER.
+struct DecoderExitPoint { double ia, ie_avg, ie_hist, ia_measured, ia_q, ie_q, ber; };
 
 inline std::vector<DecoderExitPoint> decoder_exit(const NSC_Trellis& tr, int source_bits,
                                                   int n_ia, int n_trials, int seed = 0,
-                                                  Bcjr algo = Bcjr::map)
+                                                  Bcjr algo = Bcjr::map,
+                                                  const LlrQuant& quant = LlrQuant())
 {
     Encoder_NSC<>      enc(source_bits, tr);
     Decoder_NSC_SISO<> dec(source_bits, tr);
@@ -161,17 +172,23 @@ inline std::vector<DecoderExitPoint> decoder_exit(const NSC_Trellis& tr, int sou
         const double ia = 1e-4 + (0.9999 - 1e-4) * (double)k / (double)(n_ia - 1);
         const double sa = i_inv(ia);
         double a = 0, h = 0, iam = 0;
+        long long errors = 0;
+        LevelHistogram qa(quant), qe(quant);
         for (int tr_i = 0; tr_i < n_trials; tr_i++)
         {
             gen_llrs(cw, sa, gen, la);
             if (tr_i == 0) iam = mi_avg(la, cw);
             for (int i = 0; i < N; i++) laf[(size_t)i] = (float)(-la[(size_t)i]);
+            if (quant.on()) { quant.apply(laf); qa.add(laf, cw); }
             dec.decode_both(laf.data(), extf.data(), hard.data());
+            if (quant.on()) { quant.apply(extf); qe.add(extf, cw); }
             for (int i = 0; i < N; i++) ext[(size_t)i] = -(double)extf[(size_t)i];
             a += mi_avg(ext, cw);
             h += mi_hist(ext, cw);
+            for (int i = 0; i < source_bits; i++) errors += (hard[(size_t)i] != u[(size_t)i]);
         }
-        out.push_back({ ia, a / n_trials, h / n_trials, iam });
+        out.push_back({ ia, a / n_trials, h / n_trials, iam, qa.mi(), qe.mi(),
+                        (double)errors / ((double)source_bits * n_trials) });
     }
     return out;
 }

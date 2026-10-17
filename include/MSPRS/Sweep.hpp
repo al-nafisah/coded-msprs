@@ -17,6 +17,7 @@
 
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
+#include "MSPRS/Quant.hpp"
 #include "MSPRS/Student.hpp"
 #include "MSPRS/Taps.hpp"
 
@@ -27,6 +28,7 @@ struct SweepConfig
 {
     Bcjr   algo     = Bcjr::map;   // both the equaliser and the outer decoder
     const Student* siso = nullptr;   // learned equaliser in place of the BCJR
+    LlrQuant quant;                  // messages between equaliser and decoder
     bool   coded    = true;
     int    K        = 4998;   // information bits per frame
     int    iters    = 7;      // turbo iterations; the loop runs iters+1 passes
@@ -132,8 +134,10 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
                 {
                     if (cfg.siso) cfg.siso->tdemodulate(*win, CP[0], c.rx, c.La_i, c.Le_i);
                     else          c.modem.tdemodulate(CP, c.rx, c.La_i, c.Le_i);
+                    cfg.quant.apply(c.Le_i);
                     c.itl_l  .deinterleave(c.Le_i, c.Le_n);
                     c.decoder.decode_both (c.Le_n.data(), c.De_n.data(), c.dec.data());
+                    cfg.quant.apply(c.De_n);
                     c.itl_l  .interleave  (c.De_n, c.La_i);
 
                     long long e = 0;

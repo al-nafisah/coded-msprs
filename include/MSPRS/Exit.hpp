@@ -1,4 +1,5 @@
-// EXIT machinery: J^-1, Gaussian a-priori LLRs, three MI estimators.
+// EXIT machinery: J^-1, Gaussian a-priori LLRs, three MI estimators for
+// LLRs and one for quantised messages.
 //
 // The three estimators are kept because they fail differently. Averaging and
 // histogram need the true bits; the magnitude form does not and is
@@ -16,6 +17,8 @@
 #include <cstdint>
 #include <random>
 #include <vector>
+
+#include "MSPRS/Quant.hpp"
 
 namespace msprs
 {
@@ -108,6 +111,41 @@ inline double mi_hist(const std::vector<double>& llr, const std::vector<int>& bi
     }
     return std::min(1.0, std::max(0.0, ie));
 }
+
+//! Histogram estimator with one bin per level, for quantised messages. They
+//! are no longer consistent LLRs, so the averaging and magnitude forms do not
+//! apply. Counts pool over trials, which keeps the plug-in bias, about
+//! levels / (2 n ln 2) bits, negligible.
+struct LevelHistogram
+{
+    LlrQuant               q;
+    std::vector<long long> n0, n1;   // per code, for bit 0 and bit 1
+
+    explicit LevelHistogram(const LlrQuant& quant)
+      : q(quant), n0(quant.on() ? quant.levels() : 0), n1(quant.on() ? quant.levels() : 0) {}
+
+    //! `v` already quantised, either sign convention.
+    void add(const std::vector<float>& v, const std::vector<int>& bits)
+    {
+        for (size_t i = 0; i < v.size(); i++)
+            (bits[i] == 0 ? n0 : n1)[(size_t)(q.code(v[i]) + q.top())]++;
+    }
+
+    double mi() const
+    {
+        long long t0 = 0, t1 = 0;
+        for (size_t c = 0; c < n0.size(); c++) { t0 += n0[c]; t1 += n1[c]; }
+        if (t0 == 0 || t1 == 0) return 0.0;
+        double ie = 0.0;
+        for (size_t c = 0; c < n0.size(); c++)
+        {
+            const double p0 = (double)n0[c] / t0, p1 = (double)n1[c] / t1, pt = p0 + p1;
+            if (p0 > 0.0) ie += 0.5 * p0 * std::log2(2.0 * p0 / pt);
+            if (p1 > 0.0) ie += 0.5 * p1 * std::log2(2.0 * p1 / pt);
+        }
+        return std::min(1.0, std::max(0.0, ie));
+    }
+};
 
 //! Magnitude estimator. Hagenauer 2004, eq. 9. Sign-agnostic, no true bits.
 inline double mi_mag(const std::vector<double>& llr)
