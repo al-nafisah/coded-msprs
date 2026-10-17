@@ -237,7 +237,6 @@ int main(int argc, char** argv)
         cfg.threads = a.threads;
         cfg.chunk   = a.chunk;
         cfg.seed    = a.seed;
-        cfg.itl_seed  = pr.interleaver_seed;
         cfg.ebn0_min  = a.lo;
         cfg.ebn0_max  = a.hi;
         cfg.ebn0_step = a.step;
@@ -407,7 +406,7 @@ int main(int argc, char** argv)
         double ref_ms = 0.0;   // MAP, the exact reference, comes first
         for (const auto b : { msprs::Bcjr::map, msprs::Bcjr::log_map, msprs::Bcjr::max_log_map })
         {
-            const auto   t  = msprs::time_passes(b, taps, tr, pr.source_bits, pr.interleaver_seed, a.ebn0);
+            const auto   t  = msprs::time_passes(b, taps, tr, pr.source_bits, a.ebn0);
             const double ms = passes * (t.equaliser_us + t.decoder_us) / 1e3;
             if (b == msprs::Bcjr::map) ref_ms = ms;
             std::cout << std::left << std::setw(13) << msprs::to_string(b) << std::right << std::fixed

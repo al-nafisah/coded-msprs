@@ -15,6 +15,7 @@
 
 #include <aff3ct.hpp>
 
+#include "MSPRS/Interleaver.hpp"
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Quant.hpp"
@@ -38,7 +39,6 @@ struct SweepConfig
     int    chunk    = 25;     // frames per thread between stop-rule checks
     int    threads  = 1;
     int    seed     = 0;
-    int    itl_seed = 42;
     double ebn0_min = 0.0, ebn0_max = 7.01, ebn0_step = 0.5;
 };
 
@@ -70,7 +70,7 @@ struct Chain
     std::vector<float>                      sym, rx, Le_i, La_i, Le_n, De_n;
 
     Chain(const SweepConfig& c, const NSC_Trellis& tr, const Taps& taps, int N_in,
-          int N_mod, const aff3ct::tools::Interleaver_core_random<>& core, int stream)
+          int N_mod, const aff3ct::tools::Interleaver_core<>& core, int stream)
       : source(c.K), encoder(c.K, tr), decoder(c.K, tr), modem(N_in, taps)
       , channel(N_mod), itl_b(core), itl_l(core)
       , ref(c.K), dec(c.K), cw(N_in), cw_i(N_in), n_gen(1)
@@ -93,12 +93,16 @@ inline std::vector<Point> run_sweep(const SweepConfig& cfg, const Taps& taps,
     if (cfg.siso) win.reset(new Window(N_in, taps));
 
     const int n_threads = std::max(1, cfg.threads);
-    aff3ct::tools::Interleaver_core_random<> itl_core(N_in, cfg.itl_seed, false);
+    // Uncoded frames are not interleaved.
+    std::unique_ptr<aff3ct::tools::Interleaver_core<>> itl_core;
+    if (cfg.coded) itl_core.reset(new Interleaver_core_table(load_interleaver()));
+    else           itl_core.reset(new aff3ct::tools::Interleaver_core_NO<>(N_in));
+    if (itl_core->get_size() != N_in) throw std::runtime_error("interleaver table does not match the coded block");
 
     std::vector<std::unique_ptr<detail::Chain>> chains;
     for (int t = 0; t < n_threads; t++)
     {
-        chains.emplace_back(new detail::Chain(cfg, trellis, taps, N_in, N_mod, itl_core, t + 1));
+        chains.emplace_back(new detail::Chain(cfg, trellis, taps, N_in, N_mod, *itl_core, t + 1));
         chains.back()->modem.set_bcjr(cfg.algo);
         chains.back()->decoder.set_bcjr(cfg.algo);
     }

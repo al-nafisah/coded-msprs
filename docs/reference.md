@@ -44,6 +44,14 @@ the nominal grid of the Gaussian a priori before it is quantised.
 `exit-decoder` also writes `BER`, the error rate of the information bits the
 decoder decides at each a priori.
 
+## Interleaver
+
+`rom/interleaver.hex` holds the permutation of the 10,000 coded bits, one
+14-bit address per line in hex: the i-th bit sent is bit `pi[i]` of the coded
+block. The simulator, `ota/` and the HDL all read it. It is AFF3CT's random
+interleaver with seed 42, the one every stored coded record ran with. The LDPC
+mode still draws its own 8,000-bit interleaver from that seed.
+
 ## Reproducibility
 
 EXIT results depend on `--threads`: a-priori draws are seeded per thread and

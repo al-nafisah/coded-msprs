@@ -14,6 +14,7 @@
 #include <aff3ct.hpp>
 
 #include "MSPRS/Bcjr.hpp"
+#include "MSPRS/Interleaver.hpp"
 #include "MSPRS/Modem_MSPRS.hpp"
 #include "MSPRS/NSC.hpp"
 #include "MSPRS/Taps.hpp"
@@ -43,7 +44,7 @@ inline double median_us(F&& f, const int reps = 20, const int rounds = 9)
 }
 
 inline PassTime time_passes(const Bcjr algo, const Taps& taps, const NSC_Trellis& tr, const int K,
-                            const int itl_seed, const double ebn0)
+                            const double ebn0)
 {
     const int N  = tr.codeword_length(K);
     const int Ns = Modem_MSPRS<>::size_mod(N, taps.L0);
@@ -53,7 +54,7 @@ inline PassTime time_passes(const Bcjr algo, const Taps& taps, const NSC_Trellis
     Modem_MSPRS<>      modem(N, taps);
     dec.set_bcjr(algo);
     modem.set_bcjr(algo);
-    aff3ct::tools::Interleaver_core_random<> core(N, itl_seed, false);
+    Interleaver_core_table                   core(load_interleaver());
     aff3ct::module::Interleaver<int>         itl_b(core);
     aff3ct::module::Interleaver<float>       itl_l(core);
 

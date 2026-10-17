@@ -62,6 +62,15 @@ def modulate(bits: np.ndarray, L0: int, h0: np.ndarray, h1: float) -> np.ndarray
     return s0 + h1 * x1
 
 
+def load_interleaver(path: pathlib.Path = ROOT / "rom" / "interleaver.hex") -> np.ndarray:
+    """The simulator's and the HDL's permutation: the i-th bit sent is bit
+    pi[i] of the coded block."""
+    pi = np.array([int(v, 16) for v in path.read_text().split("\n") if v and not v.startswith("//")])
+    if not np.array_equal(np.sort(pi), np.arange(len(pi))):
+        raise ValueError(f"{path} is not a permutation")
+    return pi
+
+
 def encode_57(u: np.ndarray) -> np.ndarray:
     """Rate-1/2 K=3 (5,7) code with a two-bit zero tail, outputs interleaved
     per step, generator 5 first: the simulator's Encoder_NSC."""
@@ -114,7 +123,6 @@ class Waveform:
     rolloff: float = 0.3
     span: int = 8
     guard: int = 64
-    interleaver_seed: int = 42
 
     def __post_init__(self):
         self.h0, self.h1 = load_taps(self.L0, self.family)
@@ -123,7 +131,9 @@ class Waveform:
         self.pn = m_sequence(6)
         self.preamble = np.concatenate([self.pn, self.pn])
         self.pulse = rrc(self.rolloff, self.sps, self.span)
-        self.perm = np.random.default_rng(self.interleaver_seed).permutation(self.N)
+        self.perm = load_interleaver()
+        if len(self.perm) != self.N:
+            raise ValueError("the interleaver table does not match the coded block")
         self.sites = bit_sites(self.N, self.L0)
         self.burst_symbols = len(self.preamble) + self.L + self.guard
 
